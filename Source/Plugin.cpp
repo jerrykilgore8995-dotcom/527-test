@@ -66,17 +66,17 @@ struct HarmonicColour {
   }
   // Creative bass coloration, independent of the mid/high reference anchors.
   // Review scale is dBc + 4, so -78/-70 display means -82/-74 dBc.
-  // Preserve the complete harmonic shape by applying one common multiplier.
+  // Boost only K2–K5; preserve the existing K6–K20 coefficients.
   const double bassWeight=std::clamp(1.0-std::log10(std::max(100.0,double(f))/100.0),0.0,1.0);
   if(bassWeight>0 && l>-18.f){
    double peak=0;
-   for(int k=2;k<=20;++k)if(k*double(f)<.499*sampleRate)peak=std::max(peak,std::abs(double(out[k-2])));
+   for(int k=2;k<=5;++k)if(k*double(f)<.499*sampleRate)peak=std::max(peak,std::abs(double(out[k-2])));
    if(peak>1e-15){
     const double targetDisplay=-78.0+8.0*std::clamp((double(l)-4.0)/4.0,0.0,1.0);
     const double target=std::pow(10.0,(targetDisplay-4.0)/20.0);
     const double ramp=std::clamp((double(l)+18.0)/22.0,0.0,1.0);
     const double scale=std::pow(target/peak,bassWeight*ramp);
-    for(auto& a:out)a*=float(scale);
+    for(int k=2;k<=5;++k)out[k-2]*=float(scale);
    }
   }
   return out;
