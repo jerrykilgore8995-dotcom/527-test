@@ -65,7 +65,7 @@ jobs:
               p.colour=True
               for f in (100,1000,5000,10000):
                   ks=list(range(2,min(20,(sr//2-1)//f)+1))
-                  for l,out in [(4,0),(10,0),(18,0),(4,6),(8,10)]:
+                  for l,out in [(4,0),(6,0),(8,0),(10,0),(18,0),(4,4),(4,6),(8,10)]:
                       p.output=out
                       x=(10**((l-22)/20)*np.sin(2*np.pi*f*t)).astype(np.float32)
                       y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
