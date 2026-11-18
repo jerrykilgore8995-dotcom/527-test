@@ -76,6 +76,22 @@ jobs:
                       drive.append(row)
                       print('HIGH_DRIVE',json.dumps(row),flush=True)
           pathlib.Path('high-drive.json').write_text(json.dumps(drive,indent=2))
+          trim=[]
+          p.ratio=2
+          p.threshold=0
+          p.output=0
+          p.colour=True
+          x=(10**((4-22)/20)*np.sin(2*np.pi*1000*t)).astype(np.float32)
+          for db in (-15,0,15):
+              p.digital_output=db
+              y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
+              a=2*np.abs(np.fft.rfft(y))/sr
+              row=dict(trim_db=db,fund_dbfs=float(20*np.log10(a[1000])),thd_pct=float(100*np.sqrt(sum(a[k*1000]**2 for k in range(2,21)))/a[1000]))
+              trim.append(row)
+              print('DIGITAL_TRIM',json.dumps(row),flush=True)
+          p.digital_output=0
+          pathlib.Path('digital-trim.json').write_text(json.dumps(trim,indent=2))
+
 
           PY
       - name: Capture compiled plugin editor
@@ -113,6 +129,7 @@ jobs:
           path: |
             calibration.json
             high-drive.json
+            digital-trim.json
       - uses: actions/upload-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
