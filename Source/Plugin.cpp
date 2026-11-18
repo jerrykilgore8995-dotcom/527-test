@@ -110,8 +110,9 @@ public:
   add("out","Output",-60,10,0);add("threshold","Threshold",-20,10,0);
   add("attack","Attack",1,25,10);add("release","Release",.3,3,.5);
   add("ratio","Ratio",1,30,4,.4);
-  for(auto id:{"meter","link","type","knee","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
+  for(auto id:{"meter","type","knee","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"thrust",1},"Thrust",StringArray{"Off","80 Hz","120 Hz","250 Hz"},0));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Mode",StringArray{"Off","Detonate","Explode","Burst"},0));
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -124,11 +125,15 @@ public:
  void releaseResources()override{}
  void processBlock(AudioBuffer<float>& b,MidiBuffer&)override{
   ScopedNoDenormals nd; int nc=b.getNumChannels();if(p("in")<.5f){meter=0;return;}
+  const int mode=jlimit(0,3,int(std::round(p("mode"))));
   float ratio=p("ratio");if(ratio>=29.9f)ratio=1000;
+  if(mode==1)ratio=20;else if(mode==2)ratio=8;else if(mode==3)ratio=30;
   float threshold=p("threshold")-22, makeup=p("out")<=-59.9f?0:Decibels::decibelsToGain(p("out"));
-  bool fb=p("type")>.5f,soft=p("knee")>.5f,linked=p("link")>.5f;
+  bool fb=mode==0?p("type")>.5f:false,soft=mode==0?p("knee")>.5f:mode==3; constexpr bool linked=true;
   const int thrust=jlimit(0,3,int(std::round(p("thrust"))));
-  float attack=std::exp(-1000.f/(p("attack")*sr)),release=std::exp(-1.f/(p("release")*sr));
+  const double attackMs=mode==1?.020:mode==2?8.:mode==3?.2:p("attack");
+  const double releaseSec=mode==1?.050:mode==2?.100:mode==3?.300:p("release");
+  float attack=std::exp(-1000./(attackMs*sr)),release=std::exp(-1./(releaseSec*sr));
   float rms=std::exp(-1.f/(.003f*sr));
   // Detector-only second order Butterworth high-pass; unity audio path.
   const double fc[]={0.,80.,120.,250.};
@@ -159,8 +164,8 @@ public:
     // Squared audio has a component at twice the fundamental. Reject it before RMS smoothing.
     s.cosw=std::cos(w);s.pole=std::exp(-std::max(15.,s.frequency*.35)*2*double(pi)/sr);
     s.inputPower=s.amplitude.run(double(x)*x,s.cosw,s.pole,ampSmooth);
-    double env=s.detector.run(double(d)*d,s.cosw,s.pole,rms);
-    float over=float(10*std::log10(std::max(1e-15,env))+3.01029995664-threshold);
+    double env=mode==0?s.detector.run(double(d)*d,s.cosw,s.pole,rms):double(d)*d;
+    float over=float(10*std::log10(std::max(1e-15,env))+(mode==0?3.01029995664:0.)-threshold);
     float knee=6, v=soft?(over<=-knee/2?0:over>=knee/2?over:(over+knee/2)*(over+knee/2)/(2*knee)):std::max(0.f,over);
     target[ch]=std::min(60.f,v*(fb?std::min(20.f,ratio-1):1-1/ratio));
    }
@@ -177,6 +182,12 @@ public:
      double z=jlimit(-1.,1.,double(x)/amplitude),t0=1,t1=z,extra=0;
      for(int k=2;k<=20;++k){double t=2*z*t1-t0;t0=t1;t1=t;
       if(k*s.frequency<.499*sr)extra+=s.c[k-2]*(t-(k%2==0?(k%4==0?1.:-1.):0.));}
+     if(mode==2 && 3*s.frequency<.499*sr){
+      // Extra third harmonic peaked at 200 Hz, one octave half-power in amplitude.
+      const double oct=std::log2(std::max(20.,s.frequency)/200.);
+      const double weight=std::exp(-.69314718056*oct*oct);
+      extra+=.01*weight*(4*z*z*z-3*z);
+     }
      y+=extra*amplitude*gain*makeup;
     }
     b.setSample(ch,i,y);maxgr=std::max(maxgr,float(s.gr));maximum=std::max(maximum,float(std::abs(y)));
@@ -241,7 +252,7 @@ class Panel:public AudioProcessorEditor,private Timer {
    g.setColour(Colour(0xfff3f4ef));g.setFont(Font(10.f,Font::bold));g.drawFittedText(getButtonText(),getLocalBounds().reduced(2),Justification::centred,1);
    ignoreUnused(hover);
   }
- } thrustButton;
+ } thrustButton,modeButton;
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -256,14 +267,17 @@ public:
   Rectangle<int> b[]={{125,117,82,82},{125,270,82,82},{114,438,104,104},{130,454,72,72},{112,637,108,108}};
   for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),i==2);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
   const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={439,507,575,643,711,747};
-  for(int i=0;i<6;++i){if(i==4)continue;buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
+  for(int i=0;i<6;++i){if(i==1||i==4)continue;buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
   addAndMakeVisible(thrustButton);thrustButton.setBounds(12,710,34,27);
   thrustButton.setTooltip("THRUST: Off / 80 Hz / 120 Hz / 250 Hz");
   thrustButton.onClick=[this]{if(auto* param=p.params.getParameter("thrust")){int next=(int(std::round(p.p("thrust")))+1)%4;param->beginChangeGesture();param->setValueNotifyingHost(param->convertTo0to1(float(next)));param->endChangeGesture();}repaint();};
   thrustButton.setButtonText(String(int(std::round(p.p("thrust")))));
-  setSize(W,H);startTimerHz(20);
+  addAndMakeVisible(modeButton);modeButton.setBounds(12,506,82,27);
+  modeButton.setTooltip("MODE: Off / Detonate / Explode / Burst");
+  modeButton.onClick=[this]{if(auto* param=p.params.getParameter("mode")){int next=(int(std::round(p.p("mode")))+1)%4;param->beginChangeGesture();param->setValueNotifyingHost(param->convertTo0to1(float(next)));param->endChangeGesture();}};
+  timerCallback();setSize(W,H);startTimerHz(20);
  }
- void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));repaint();}
+ void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){knobs[i]->setEnabled(fx==0);knobs[i]->setAlpha(fx==0?1.f:.55f);}buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
  void paint(Graphics& g)override{
   g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
@@ -292,7 +306,7 @@ public:
   txt(g,"ATTACK",112,555,55,16,11);txt(g,"RELEASE",175,555,71,16,11,blue);txt(g,"mS",124,572,27,13,10);txt(g,"S",197,572,18,13,10,blue);
   arc(166,691,58,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),214,743,22,14,13);txt(g,"RATIO",142,754,49,16,12);
   const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
-  for(int i=0;i<5;++i){int yy=439+i*68;txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
+  for(int i=0;i<5;++i){int yy=439+i*68;if(i==1){txt(g,"MODE",12,492,82,13,11,blue);continue;}txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4&&i!=1){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
   const char* freqLabel[]={"","80 Hz","120 Hz","250 Hz"};txt(g,freqLabel[jlimit(0,3,int(std::round(p.p("thrust"))))],49,730,62,13,10);
   txt(g,"IN",39,760,25,16,12);
 
