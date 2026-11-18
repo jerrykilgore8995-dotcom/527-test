@@ -80,6 +80,38 @@ struct HarmonicColour {
     for(int k=2;k<=5;++k)out[k-2]*=float(scale);
    }
   }
+  // Use the actual settled 525C high-drive anchors at IN 50%, OUT 75%, stock Compress.
+  // Bass remains exactly the original algorithm; crossfade smoothly over the 100 Hz--1 kHz band.
+  if(l>4.f && f>100.f){
+   struct High {float f,l;std::array<float,19> a;};
+   static constexpr High high[]={{1000.f,10.f,{1.865900657e-5f,-7.412016437e-6f,8.861476052e-6f,-4.600028330e-6f,1.959136661e-6f,8.624753947e-7f,7.034837151e-8f,1.399852457e-6f,-1.536459735e-6f,2.082172716e-6f,1.184803576e-6f,2.180211205e-6f,1.234052097e-6f,2.287389770e-6f,-5.711306693e-7f,9.325469315e-7f,-1.450189049e-7f,-8.710349579e-7f,5.721977590e-7f}},
+{1000.f,18.f,{1.406201699e-5f,-7.856830613e-6f,5.504732849e-6f,-5.524730304e-6f,-7.521950012e-6f,4.204599075e-6f,-2.801134174e-6f,2.765529641e-6f,9.629545914e-7f,-1.673698449e-6f,3.933678580e-6f,-1.825097518e-6f,3.326519203e-6f,1.247892516e-6f,-6.608091027e-7f,2.431371361e-7f,-1.699636334e-6f,1.030631230e-6f,1.894938589e-6f}},
+{1000.f,24.f,{-4.921433063e-6f,1.063748937e-5f,4.432608467e-6f,-7.150918917e-6f,3.799109194e-6f,5.982315438e-6f,-3.548867234e-6f,-5.656563408e-6f,1.299350455e-6f,4.861774103e-6f,-3.089052523e-6f,-2.355232944e-6f,1.530167360e-6f,-3.640100896e-6f,-6.719616302e-7f,2.241330660e-6f,6.257727741e-7f,-2.468052456e-6f,-9.732699880e-7f}},
+{5000.f,10.f,{5.819466230e-5f,-1.403725105e-5f,-1.139316921e-5f,3.932903103e-6f,3.790541439e-6f,-1.561259775e-6f,-1.423337922e-6f,-1.062980585e-6f,-1.244936208e-6f,5.106104276e-7f,-1.164444287e-6f,3.572219366e-7f,-1.040878586e-6f,-2.037678831e-7f,-6.461566004e-7f,2.202760648e-7f,3.042145545e-7f,4.323034042e-7f,-2.040674376e-7f}},
+{5000.f,18.f,{4.288467057e-5f,-1.375673038e-5f,-1.878842079e-5f,4.920769200e-6f,-8.743883600e-6f,-1.178268771e-6f,3.101037820e-6f,-1.946441912e-6f,3.231394910e-6f,-2.070830901e-6f,-3.159737017e-6f,-1.808246441e-6f,-1.525843918e-6f,-1.696562521e-6f,1.092357128e-6f,-9.787940923e-7f,8.407625916e-7f,1.277215492e-6f,-8.795796889e-7f}}};
+   auto measured=[&](float freq){
+    // Evaluate the old measured +4 reference without creative extrapolation.
+    std::array<float,19> base{};
+    for(int bank=0;bank<2;++bank){double sum=0;std::array<double,19> acc{};
+     for(const auto& r:rows[bank]){const double df=std::log2(freq/r.f),dl=(4.-r.l)/12.;const double w=1./std::max(1e-6,df*df+dl*dl);sum+=w;for(int k=0;k<19;++k)acc[k]+=w*r.a[k];}
+     if(sum>0)for(int k=0;k<19;++k)base[k]+=float(acc[k]/sum*(bank?mix:1-mix));
+    }
+    const High* lo=nullptr;const High* hi=nullptr;
+    for(const auto& r:high)if(r.f==freq){if(r.l<=l&&(!lo||r.l>lo->l))lo=&r;if(r.l>=l&&(!hi||r.l<hi->l))hi=&r;}
+    // At 10 kHz no settled high-drive source rows exist; hold +4 rather than invent a measurement.
+    if(!lo&&!hi)return base;
+    if(!hi)return lo->a;
+    const auto& a=lo?lo->a:base;const float start=lo?lo->l:4.f;
+    const float t=hi->l>start?jlimit(0.f,1.f,(l-start)/(hi->l-start)):1.f;
+    for(int k=0;k<19;++k)base[k]=a[k]+t*(hi->a[k]-a[k]);
+    return base;
+   };
+   const float low=f<=5000.f?1000.f:5000.f, upper=f<=5000.f?5000.f:10000.f;
+   const auto a=measured(low),b=measured(upper);
+   const float t=jlimit(0.f,1.f,float(std::log(f/low)/std::log(upper/low)));
+   const float w=jlimit(0.f,1.f,float(std::log10(f/100.f)));
+   for(int k=0;k<19;++k)out[k]=(1-w)*out[k]+w*(a[k]+t*(b[k]-a[k]));
+  }
   return out;
  }
 };
@@ -117,6 +149,7 @@ public:
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"detector",1},"Detector",StringArray{"527 RMS","Peak","Hybrid"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"auto_release",1},"Auto Release",StringArray{"Manual","VCA","OPTO","BVCA"},0));
   add("mix","Mix",0,100,100);
+  add("digital_out","Digital Output",-15,15,0);
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -133,6 +166,7 @@ public:
   const int detMode=mode==0?jlimit(0,2,int(std::round(p("detector")))):1;
   const int autoMode=mode==0?jlimit(0,3,int(std::round(p("auto_release")))):0;
   const double wet=jlimit(0.,1.,double(p("mix"))*.01);
+  const double digitalOut=std::pow(10.,double(p("digital_out"))/20.);
   const double peakDecay=std::exp(-1./(.001*sr)), optoCharge=std::exp(-1./(.8*sr)), optoDischarge=std::exp(-1./(2.*sr));
   const double busCharge=std::exp(-1./(.6*sr)), busDischarge=std::exp(-1./(1.2*sr));
   const double optoFast=std::exp(-std::log(2.)/(.060*sr)), busFast=std::exp(-1./(.100*sr)), busSlow=std::exp(-1./(.600*sr));
@@ -222,6 +256,7 @@ public:
      y+=extra*amplitude*gain*makeup;
     }
     if(wet<1.)y=wet*y+(1.-wet)*double(x);
+    y*=digitalOut;
     b.setSample(ch,i,y);maxgr=std::max(maxgr,float(s.gr));maximum=std::max(maximum,float(std::abs(y)));
    }
   }
@@ -285,11 +320,11 @@ class Panel:public AudioProcessorEditor,private Timer {
    ignoreUnused(hover);
   }
  } thrustButton,modeButton,advancedButton;
- ComboBox detectorBox,releaseBox; Slider mixKnob;
+ ComboBox detectorBox,releaseBox; Slider mixKnob,trimKnob;
  using CA=AudioProcessorValueTreeState::ComboBoxAttachment;
- std::unique_ptr<CA> detectorAttach,releaseAttach;std::unique_ptr<SA> mixAttach;
+ std::unique_ptr<CA> detectorAttach,releaseAttach;std::unique_ptr<SA> mixAttach,trimAttach;
  bool expanded=false;
- void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?220:30));repaint();}
+ void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);trimKnob.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?290:30));repaint();}
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -301,8 +336,8 @@ public:
  Panel(Proc& proc):AudioProcessorEditor(proc),p(proc){
   const char* ids[]={"out","threshold","attack","release","ratio"};
   unsigned cs[]={0xff202223,0xff087b82,0xffc6d0d3,0xffebf3f5,0xffed302b};
-  Rectangle<int> b[]={{125,117,82,82},{125,270,82,82},{114,438,104,104},{130,454,72,72},{112,637,108,108}};
-  for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),i==2);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
+  Rectangle<int> b[]={{125,117,82,82},{125,270,82,82},{130,430,72,72},{130,548,72,72},{126,671,80,80}};
+  for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),false);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
   const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={439,507,575,643,711,747};
   for(int i=0;i<6;++i){if(i==1||i==4)continue;buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
   addAndMakeVisible(thrustButton);thrustButton.setBounds(12,710,34,27);
@@ -319,8 +354,9 @@ public:
   for(auto* box:{&detectorBox,&releaseBox}){addChildComponent(*box);box->setColour(ComboBox::backgroundColourId,Colour(0xff151717));box->setColour(ComboBox::textColourId,Colour(white));box->setColour(ComboBox::outlineColourId,Colour(0xff666969));}
   detectorBox.setBounds(16,H+52,W-32,26);releaseBox.setBounds(16,H+100,W-32,26);
   addChildComponent(mixKnob);mixKnob.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);mixKnob.setTextBoxStyle(Slider::TextBoxRight,false,54,22);mixKnob.setTextValueSuffix("%");mixKnob.setBounds(85,H+139,145,68);
+  addChildComponent(trimKnob);trimKnob.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);trimKnob.setTextBoxStyle(Slider::TextBoxRight,false,65,22);trimKnob.setTextValueSuffix(" dB");trimKnob.setDoubleClickReturnValue(true,0);trimKnob.setBounds(85,H+209,145,68);trimKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));trimKnob.setColour(Slider::textBoxTextColourId,Colour(white));trimKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
   mixKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));mixKnob.setColour(Slider::textBoxTextColourId,Colour(white));mixKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
-  detectorAttach=std::make_unique<CA>(p.params,"detector",detectorBox);releaseAttach=std::make_unique<CA>(p.params,"auto_release",releaseBox);mixAttach=std::make_unique<SA>(p.params,"mix",mixKnob);
+  detectorAttach=std::make_unique<CA>(p.params,"detector",detectorBox);releaseAttach=std::make_unique<CA>(p.params,"auto_release",releaseBox);mixAttach=std::make_unique<SA>(p.params,"mix",mixKnob);trimAttach=std::make_unique<SA>(p.params,"digital_out",trimKnob);
   showAdvanced(false);timerCallback();startTimerHz(20);
  }
  void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){const bool active=fx==0&&(i!=3||p.p("auto_release")<.5f);knobs[i]->setEnabled(active);knobs[i]->setAlpha(active?1.f:.55f);}detectorBox.setEnabled(fx==0);releaseBox.setEnabled(fx==0);buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
@@ -347,16 +383,17 @@ public:
   auto vertical=[&](String s,int yy){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),237,yy+i*13,13,13,12);};
   vertical("OUT",141);vertical("THRESH",280);
   // Independently positioned labels for concentric scales, avoiding the switch column.
-  arc(166,490,57,{"1","5","","15","20","25"},white);
-  arc(166,490,44,{".3",".5","1","1.5","2","2.5","3"},blue);
-  txt(g,"ATTACK",112,555,55,16,11);txt(g,"RELEASE",175,555,71,16,11,blue);txt(g,"mS",124,572,27,13,10);txt(g,"S",197,572,18,13,10,blue);
-  arc(166,691,58,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),214,743,22,14,13);txt(g,"RATIO",142,754,49,16,12);
+  arc(166,466,37,{"1","5","10","15","20","25"},white);
+  txt(g,"ATTACK (ms)",115,512,102,16,11);
+  arc(166,584,37,{".3",".5","1","1.5","2","2.5","3"},blue);
+  txt(g,"RELEASE (s)",115,627,102,16,11,blue);
+  arc(166,711,44,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),205,754,22,14,13);txt(g,"RATIO",142,772,49,16,12);
   const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
   for(int i=0;i<5;++i){int yy=439+i*68;if(i==1){txt(g,"MODE",12,492,82,13,11,blue);continue;}txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4&&i!=1){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
   const char* freqLabel[]={"","80 Hz","120 Hz","250 Hz"};txt(g,freqLabel[jlimit(0,3,int(std::round(p.p("thrust"))))],49,730,62,13,10);
   txt(g,"IN",39,760,25,16,12);
   g.setColour(Colour(0xff131515));g.fillRect(0,H,W,getHeight()-H);
-  if(expanded){txt(g,"DETECTOR",16,H+34,W-32,15,11,blue);txt(g,"RELEASE CHARACTER",16,H+82,W-32,15,11,blue);txt(g,"MIX",17,H+159,60,20,12,blue);}
+  if(expanded){txt(g,"DETECTOR",16,H+34,W-32,15,11,blue);txt(g,"RELEASE CHARACTER",16,H+82,W-32,15,11,blue);txt(g,"MIX",17,H+159,60,20,12,blue);txt(g,"DIGITAL OUT",8,H+229,82,20,11,blue);}
 
 
  }
