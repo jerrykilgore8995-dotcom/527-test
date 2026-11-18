@@ -142,9 +142,11 @@ public:
    l.add(std::make_unique<AudioParameterFloat>(ParameterID{id,1},name,NormalisableRange<float>(lo,hi,0.f,skew),def));};
   add("out","Output",-60,10,0);add("threshold","Threshold",-20,10,0);
   add("attack","Attack",1,25,10);add("release","Release",.3,3,.5);
+  add("var_attack","Variable Attack",.02f,100.f,10.f,.35f);add("var_release","Variable Release",.01f,5.f,.5f,.35f);
+  l.add(std::make_unique<AudioParameterBool>(ParameterID{"variable_ar",1},"Variable A/R",false));
   add("ratio","Ratio",1,30,4,.4);
   for(auto id:{"meter","type","knee","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"thrust",1},"Thrust",StringArray{"Off","80 Hz","120 Hz","250 Hz"},0));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"thrust",1},"HPF",StringArray{"Off","80 Hz","120 Hz","250 Hz"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Mode",StringArray{"Off","Detonate","Explode","Burst"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"detector",1},"Detector",StringArray{"527 RMS","Peak","Hybrid"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"auto_release",1},"Auto Release",StringArray{"Manual","VCA","OPTO","BVCA"},0));
@@ -175,8 +177,9 @@ public:
   float threshold=p("threshold")-22, makeup=p("out")<=-59.9f?0:Decibels::decibelsToGain(p("out"));
   bool fb=mode==0?p("type")>.5f:false,soft=mode==0?p("knee")>.5f:mode==3; constexpr bool linked=true;
   const int thrust=jlimit(0,3,int(std::round(p("thrust"))));
-  const double attackMs=mode==1?.020:mode==2?8.:mode==3?.2:p("attack");
-  const double releaseSec=mode==1?.050:mode==2?.100:mode==3?.300:p("release");
+  const bool variable=p("variable_ar")>.5f;
+  const double attackMs=mode==1?.020:mode==2?8.:mode==3?.2:variable?p("var_attack"):p("attack");
+  const double releaseSec=mode==1?.050:mode==2?.100:mode==3?.300:variable?p("var_release"):p("release");
   float attack=std::exp(-1000./(attackMs*sr)),release=std::exp(-1./(releaseSec*sr));
   float rms=std::exp(-1.f/(.003f*sr));
   // Detector-only second order Butterworth high-pass; unity audio path.
@@ -320,11 +323,12 @@ class Panel:public AudioProcessorEditor,private Timer {
    ignoreUnused(hover);
   }
  } thrustButton,modeButton,advancedButton;
- ComboBox detectorBox,releaseBox; Slider mixKnob,trimKnob;
+ ComboBox detectorBox,releaseBox; Slider mixKnob,trimKnob; ToggleButton variableAR{"Variable A/R"};
+ std::unique_ptr<BA> variableAttach;bool timingVariable=false;
  using CA=AudioProcessorValueTreeState::ComboBoxAttachment;
  std::unique_ptr<CA> detectorAttach,releaseAttach;std::unique_ptr<SA> mixAttach,trimAttach;
  bool expanded=false;
- void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);trimKnob.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?290:30));repaint();}
+ void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);trimKnob.setVisible(show);variableAR.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?324:30));repaint();}
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -341,7 +345,7 @@ public:
   const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={439,507,575,643,711,747};
   for(int i=0;i<6;++i){if(i==1||i==4)continue;buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
   addAndMakeVisible(thrustButton);thrustButton.setBounds(12,710,34,27);
-  thrustButton.setTooltip("THRUST: Off / 80 Hz / 120 Hz / 250 Hz");
+  thrustButton.setTooltip("HPF: Off / 80 Hz / 120 Hz / 250 Hz");
   thrustButton.onClick=[this]{if(auto* param=p.params.getParameter("thrust")){int next=(int(std::round(p.p("thrust")))+1)%4;param->beginChangeGesture();param->setValueNotifyingHost(param->convertTo0to1(float(next)));param->endChangeGesture();}repaint();};
   thrustButton.setButtonText(String(int(std::round(p.p("thrust")))));
   addAndMakeVisible(modeButton);modeButton.setBounds(12,506,82,27);
@@ -357,9 +361,13 @@ public:
   addChildComponent(trimKnob);trimKnob.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);trimKnob.setTextBoxStyle(Slider::TextBoxRight,false,65,22);trimKnob.setTextValueSuffix(" dB");trimKnob.setDoubleClickReturnValue(true,0);trimKnob.setBounds(85,H+209,145,68);trimKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));trimKnob.setColour(Slider::textBoxTextColourId,Colour(white));trimKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
   mixKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));mixKnob.setColour(Slider::textBoxTextColourId,Colour(white));mixKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
   detectorAttach=std::make_unique<CA>(p.params,"detector",detectorBox);releaseAttach=std::make_unique<CA>(p.params,"auto_release",releaseBox);mixAttach=std::make_unique<SA>(p.params,"mix",mixKnob);trimAttach=std::make_unique<SA>(p.params,"digital_out",trimKnob);
+  addChildComponent(variableAR);variableAR.setBounds(16,H+283,W-32,27);variableAR.setColour(ToggleButton::textColourId,Colour(white));variableAR.setColour(ToggleButton::tickColourId,Colour(blue));variableAR.setTooltip("Switch the front-panel timing knobs to independent continuous digital attack/release ranges");variableAttach=std::make_unique<BA>(p.params,"variable_ar",variableAR);
   showAdvanced(false);timerCallback();startTimerHz(20);
  }
- void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){const bool active=fx==0&&(i!=3||p.p("auto_release")<.5f);knobs[i]->setEnabled(active);knobs[i]->setAlpha(active?1.f:.55f);}detectorBox.setEnabled(fx==0);releaseBox.setEnabled(fx==0);buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
+ void timerCallback()override{
+  const bool variable=p.p("variable_ar")>.5f;
+  if(variable!=timingVariable){for(int i=2;i<=3;++i){ka[i].reset();ka[i]=std::make_unique<SA>(p.params,variable?(i==2?"var_attack":"var_release"):(i==2?"attack":"release"),*knobs[i]);}timingVariable=variable;}
+  const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){const bool active=fx==0&&(i!=3||p.p("auto_release")<.5f);knobs[i]->setEnabled(active);knobs[i]->setAlpha(active?1.f:.55f);}detectorBox.setEnabled(fx==0);releaseBox.setEnabled(fx==0);variableAR.setEnabled(fx==0);buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
  void paint(Graphics& g)override{
   g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
@@ -383,12 +391,12 @@ public:
   auto vertical=[&](String s,int yy){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),237,yy+i*13,13,13,12);};
   vertical("OUT",141);vertical("THRESH",280);
   // Independently positioned labels for concentric scales, avoiding the switch column.
-  arc(166,466,37,{"1","5","10","15","20","25"},white);
+  if(!timingVariable)arc(166,466,37,{"1","5","10","15","20","25"},white);else{txt(g,".02",114,490,27,13,10);txt(g,"100",193,490,27,13,10);txt(g,String(p.p("var_attack"),2),140,407,52,15,11,blue);}
   txt(g,"ATTACK (ms)",115,512,102,16,11);
-  arc(166,584,37,{".3",".5","1","1.5","2","2.5","3"},blue);
+  if(!timingVariable)arc(166,584,37,{".3",".5","1","1.5","2","2.5","3"},blue);else{txt(g,".01",114,608,27,13,10);txt(g,"5",193,608,27,13,10);txt(g,String(p.p("var_release"),3),140,526,52,15,11,blue);}
   txt(g,"RELEASE (s)",115,627,102,16,11,blue);
   arc(166,711,44,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),205,754,22,14,13);txt(g,"RATIO",142,772,49,16,12);
-  const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
+  const char* names[]={"METER","LINK","TYPE","KNEE","HPF"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
   for(int i=0;i<5;++i){int yy=439+i*68;if(i==1){txt(g,"MODE",12,492,82,13,11,blue);continue;}txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4&&i!=1){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
   const char* freqLabel[]={"","80 Hz","120 Hz","250 Hz"};txt(g,freqLabel[jlimit(0,3,int(std::round(p.p("thrust"))))],49,730,62,13,10);
   txt(g,"IN",39,760,25,16,12);
