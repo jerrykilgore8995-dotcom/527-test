@@ -57,6 +57,35 @@ jobs:
                   print('CALIBRATION',json.dumps(row),flush=True)
           pathlib.Path('calibration.json').write_text(json.dumps(results,indent=2))
           PY
+      - name: Capture compiled plugin editor
+        timeout-minutes: 2
+        continue-on-error: true
+        shell: bash
+        run: |
+          python -m pip install pillow
+          python - <<'PY'
+          import pathlib, threading, time
+          from pedalboard import load_plugin
+          from PIL import ImageGrab
+          path=next(x for x in pathlib.Path('build/Comp527_artefacts/Release/VST3').rglob('*.vst3') if x.is_file())
+          p=load_plugin(str(path.resolve()))
+          def capture():
+              time.sleep(4)
+              ImageGrab.grab(all_screens=True).save('527-editor.png')
+          threading.Thread(target=capture,daemon=True).start()
+          import os
+          def stop():
+              time.sleep(12)
+              os._exit(0)
+          threading.Thread(target=stop,daemon=True).start()
+          p.show_editor()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 527-editor-preview
+          path: 527-editor.png
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: 527-calibration
