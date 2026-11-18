@@ -93,6 +93,7 @@ struct RippleFilter {
 };
 struct State {
  double hpZ1=0,hpZ2=0; int hpMode=0;
+ double optoMemory=0,busMemory=0,peakEnv=0; int lastAuto=0;
  double gr=0,feedback=0,lp=0,old=0,older=0,frequency=1000,clock=0,lastCross=-1,period=44.1,cosw=0,pole=.9,inputPower=0,previousGain=1;
  int update=0; RippleFilter detector,amplitude;
  std::array<float,19> c{};
@@ -113,6 +114,9 @@ public:
   for(auto id:{"meter","type","knee","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"thrust",1},"Thrust",StringArray{"Off","80 Hz","120 Hz","250 Hz"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Mode",StringArray{"Off","Detonate","Explode","Burst"},0));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"detector",1},"Detector",StringArray{"527 RMS","Peak","Hybrid"},0));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"auto_release",1},"Auto Release",StringArray{"Manual","VCA","OPTO","BVCA"},0));
+  add("mix","Mix",0,100,100);
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -126,6 +130,12 @@ public:
  void processBlock(AudioBuffer<float>& b,MidiBuffer&)override{
   ScopedNoDenormals nd; int nc=b.getNumChannels();if(p("in")<.5f){meter=0;return;}
   const int mode=jlimit(0,3,int(std::round(p("mode"))));
+  const int detMode=mode==0?jlimit(0,2,int(std::round(p("detector")))):1;
+  const int autoMode=mode==0?jlimit(0,3,int(std::round(p("auto_release")))):0;
+  const double wet=jlimit(0.,1.,double(p("mix"))*.01);
+  const double peakDecay=std::exp(-1./(.001*sr)), optoCharge=std::exp(-1./(.8*sr)), optoDischarge=std::exp(-1./(2.*sr));
+  const double busCharge=std::exp(-1./(.6*sr)), busDischarge=std::exp(-1./(1.2*sr));
+  const double optoFast=std::exp(-std::log(2.)/(.060*sr)), busFast=std::exp(-1./(.100*sr)), busSlow=std::exp(-1./(.600*sr));
   float ratio=p("ratio");if(ratio>=29.9f)ratio=1000;
   if(mode==1)ratio=20;else if(mode==2)ratio=8;else if(mode==3)ratio=30;
   float threshold=p("threshold")-22, makeup=p("out")<=-59.9f?0:Decibels::decibelsToGain(p("out"));
@@ -164,14 +174,35 @@ public:
     // Squared audio has a component at twice the fundamental. Reject it before RMS smoothing.
     s.cosw=std::cos(w);s.pole=std::exp(-std::max(15.,s.frequency*.35)*2*double(pi)/sr);
     s.inputPower=s.amplitude.run(double(x)*x,s.cosw,s.pole,ampSmooth);
-    double env=mode==0?s.detector.run(double(d)*d,s.cosw,s.pole,rms):double(d)*d;
-    float over=float(10*std::log10(std::max(1e-15,env))+(mode==0?3.01029995664:0.)-threshold);
+    const double rmsPower=mode==0?2.*s.detector.run(double(d)*d,s.cosw,s.pole,rms):double(d)*d;
+    s.peakEnv=std::max(std::abs(double(d)),s.peakEnv*peakDecay);
+    const double peakPower=s.peakEnv*s.peakEnv;
+    // Preserve the original standard and special-mode detector laws exactly.
+    double env=mode!=0?double(d)*d:detMode==0?rmsPower:detMode==1?peakPower:.5*(rmsPower+peakPower);
+    float over=mode==0&&detMode==0?float(10*std::log10(std::max(1e-15,rmsPower*.5))+3.01029995664-threshold):float(10*std::log10(std::max(1e-15,env))-threshold);
     float knee=6, v=soft?(over<=-knee/2?0:over>=knee/2?over:(over+knee/2)*(over+knee/2)/(2*knee)):std::max(0.f,over);
     target[ch]=std::min(60.f,v*(fb?std::min(20.f,ratio-1):1-1/ratio));
    }
    if(linked&&nc==2)target[0]=target[1]=std::max(target[0],target[1]);
    for(int ch=0;ch<nc;++ch){
-    auto& s=st[ch];float x=b.getSample(ch,i),a=target[ch]>s.gr?attack:release;s.gr=a*s.gr+(1-a)*target[ch];
+    auto& s=st[ch];float x=b.getSample(ch,i);const double t=target[ch];
+    if(autoMode!=s.lastAuto){s.optoMemory=s.busMemory=0;s.lastAuto=autoMode;}
+    // Independent leaky storage states represent slow optical memory and bus capacitor charge.
+    // Charge with compression demand; discharge between events. Both remain bounded.
+    const double demand=jlimit(0.,1.,t/12.);
+    const double oc=demand>s.optoMemory?optoCharge:optoDischarge;
+    const double bc=demand>s.busMemory?busCharge:busDischarge;
+    s.optoMemory=oc*s.optoMemory+(1.-oc)*demand;
+    s.busMemory=bc*s.busMemory+(1.-bc)*demand;
+    if(t>=s.gr)s.gr=attack*s.gr+(1.-attack)*t;
+    else if(autoMode==1)s.gr=std::max(t,s.gr-120./sr);
+    else if(autoMode==2){
+     const double slow=std::exp(-1./((.5+4.5*s.optoMemory)*sr));
+     const double share=jlimit(0.,.85,s.optoMemory*.85);
+     s.gr=t+(s.gr-t)*((1.-share)*optoFast+share*slow);
+    }else if(autoMode==3){
+     s.gr=t+(s.gr-t)*((1.-s.busMemory)*busFast+s.busMemory*busSlow);
+    }else s.gr=release*s.gr+(1.-release)*t;
     double gain=std::pow(10.,-s.gr/20),y=x*gain;s.feedback=y;y*=makeup;
     double amplitude=std::sqrt(2*s.inputPower);
     if(++s.update>=128){s.update=0;
@@ -190,6 +221,7 @@ public:
      }
      y+=extra*amplitude*gain*makeup;
     }
+    if(wet<1.)y=wet*y+(1.-wet)*double(x);
     b.setSample(ch,i,y);maxgr=std::max(maxgr,float(s.gr));maximum=std::max(maximum,float(std::abs(y)));
    }
   }
@@ -252,7 +284,12 @@ class Panel:public AudioProcessorEditor,private Timer {
    g.setColour(Colour(0xfff3f4ef));g.setFont(Font(10.f,Font::bold));g.drawFittedText(getButtonText(),getLocalBounds().reduced(2),Justification::centred,1);
    ignoreUnused(hover);
   }
- } thrustButton,modeButton;
+ } thrustButton,modeButton,advancedButton;
+ ComboBox detectorBox,releaseBox; Slider mixKnob;
+ using CA=AudioProcessorValueTreeState::ComboBoxAttachment;
+ std::unique_ptr<CA> detectorAttach,releaseAttach;std::unique_ptr<SA> mixAttach;
+ bool expanded=false;
+ void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?220:30));repaint();}
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -275,9 +312,18 @@ public:
   addAndMakeVisible(modeButton);modeButton.setBounds(12,506,82,27);
   modeButton.setTooltip("MODE: Off / Detonate / Explode / Burst");
   modeButton.onClick=[this]{if(auto* param=p.params.getParameter("mode")){int next=(int(std::round(p.p("mode")))+1)%4;param->beginChangeGesture();param->setValueNotifyingHost(param->convertTo0to1(float(next)));param->endChangeGesture();}};
-  timerCallback();setSize(W,H);startTimerHz(20);
+  addAndMakeVisible(advancedButton);advancedButton.setBounds(8,H+3,W-16,24);
+  advancedButton.onClick=[this]{showAdvanced(!expanded);};
+  detectorBox.addItemList(StringArray{"527 RMS","Peak","Hybrid"},1);
+  releaseBox.addItemList(StringArray{"Manual","VCA - dbx","OPTO","BVCA - SSL"},1);
+  for(auto* box:{&detectorBox,&releaseBox}){addChildComponent(*box);box->setColour(ComboBox::backgroundColourId,Colour(0xff151717));box->setColour(ComboBox::textColourId,Colour(white));box->setColour(ComboBox::outlineColourId,Colour(0xff666969));}
+  detectorBox.setBounds(16,H+52,W-32,26);releaseBox.setBounds(16,H+100,W-32,26);
+  addChildComponent(mixKnob);mixKnob.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);mixKnob.setTextBoxStyle(Slider::TextBoxRight,false,54,22);mixKnob.setTextValueSuffix("%");mixKnob.setBounds(85,H+139,145,68);
+  mixKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));mixKnob.setColour(Slider::textBoxTextColourId,Colour(white));mixKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
+  detectorAttach=std::make_unique<CA>(p.params,"detector",detectorBox);releaseAttach=std::make_unique<CA>(p.params,"auto_release",releaseBox);mixAttach=std::make_unique<SA>(p.params,"mix",mixKnob);
+  showAdvanced(false);timerCallback();startTimerHz(20);
  }
- void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){knobs[i]->setEnabled(fx==0);knobs[i]->setAlpha(fx==0?1.f:.55f);}buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
+ void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));const int fx=jlimit(0,3,int(std::round(p.p("mode"))));const char* names[]={"OFF","DETONATE","EXPLODE","BURST"};modeButton.setButtonText(names[fx]);for(int i=2;i<5;++i){const bool active=fx==0&&(i!=3||p.p("auto_release")<.5f);knobs[i]->setEnabled(active);knobs[i]->setAlpha(active?1.f:.55f);}detectorBox.setEnabled(fx==0);releaseBox.setEnabled(fx==0);buttons[2].setEnabled(fx==0);buttons[3].setEnabled(fx==0);repaint();}
  void paint(Graphics& g)override{
   g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
@@ -309,6 +355,9 @@ public:
   for(int i=0;i<5;++i){int yy=439+i*68;if(i==1){txt(g,"MODE",12,492,82,13,11,blue);continue;}txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4&&i!=1){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
   const char* freqLabel[]={"","80 Hz","120 Hz","250 Hz"};txt(g,freqLabel[jlimit(0,3,int(std::round(p.p("thrust"))))],49,730,62,13,10);
   txt(g,"IN",39,760,25,16,12);
+  g.setColour(Colour(0xff131515));g.fillRect(0,H,W,getHeight()-H);
+  if(expanded){txt(g,"DETECTOR",16,H+34,W-32,15,11,blue);txt(g,"RELEASE CHARACTER",16,H+82,W-32,15,11,blue);txt(g,"MIX",17,H+159,60,20,12,blue);}
+
 
  }
 };
