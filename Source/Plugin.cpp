@@ -152,6 +152,7 @@ public:
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"auto_release",1},"Auto Release",StringArray{"Manual","VCA","OPTO","BVCA"},0));
   add("mix","Mix",0,100,100);
   add("digital_out","Digital Output",-15,15,0);
+  l.add(std::make_unique<AudioParameterBool>(ParameterID{"nasty",1},"Nasty",false));
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -186,7 +187,7 @@ public:
   const double fc[]={0.,80.,120.,250.};
   const double w0=2*pi*std::min(fc[thrust],sr*.45)/sr, co=std::cos(w0), alpha=std::sin(w0)/std::sqrt(2.), norm=1./(1.+alpha);
   const double b0=(1.+co)*.5*norm,b1=-(1.+co)*norm,b2=b0,a1=-2.*co*norm,a2=(1.-alpha)*norm;
-  float maxgr=0,maximum=0; bool colored=p("colour")>.5f; const double ampSmooth=std::exp(-1/(.02*sr));
+  float maxgr=0,maximum=0; bool colored=p("colour")>.5f;const bool nasty=p("nasty")>.5f; const double ampSmooth=std::exp(-1/(.02*sr));
   for(int i=0;i<b.getNumSamples();++i){
    float target[2]{};
    for(int ch=0;ch<nc;++ch){
@@ -246,11 +247,25 @@ public:
      // At unity output use original measured input level. Makeup changes drive into coloration.
      double level=20*std::log10(std::max(amplitude,1e-12))+22+p("out");
      s.c=colour.coeff(float(s.frequency),float(level),ratio,sr);}
-    if(colored && amplitude>1e-8 && makeup>0){
+    if((colored||nasty) && amplitude>1e-8 && makeup>0){
      double z=jlimit(-1.,1.,double(x)/amplitude),t0=1,t1=z,extra=0;
+     // NASTY is a separate HF-weighted nonlinear colour stage, not extra gain reduction.
+     const double freq=s.frequency;
+     const double band=nasty?jlimit(0.,1.,std::log2(std::max(1000.,freq)/1000.)/std::log2(5.)):0.;
+     const double top=nasty?jlimit(0.,1.,std::log2(std::max(5000.,freq)/5000.)):0.;
+     const double drive=nasty?20.*std::log10(std::max(amplitude,1e-12))+22.+p("out"):0.;
+     const double strength=nasty?jlimit(0.,1.,(drive+30.)/48.):0.;
+     const double k2Target=band*band*(.005+.005*top);
      for(int k=2;k<=20;++k){double t=2*z*t1-t0;t0=t1;t1=t;
-      if(k*s.frequency<.499*sr)extra+=s.c[k-2]*(t-(k%2==0?(k%4==0?1.:-1.):0.));}
-     if(mode==2 && 3*s.frequency<.499*sr){
+      if(k*freq>=.499*sr)continue;
+      double coeff=colored?s.c[k-2]:0.;
+      if(nasty && band>0.){
+       if(k==2)coeff+=(std::copysign(k2Target,coeff==0.?1.:coeff)-coeff)*strength;
+       else {const double weights[]={0.,0.,0.,.64,.40,.26,.18,.13,.09,.065,.047,.034,.025,.018,.013,.009,.007,.005,.004,.003,.002};
+        coeff+=strength*k2Target*weights[k]*(k%4==0||k%4==1?-1.:1.);}
+      }
+      extra+=coeff*(t-(k%2==0?(k%4==0?1.:-1.):0.));}
+     if(colored && mode==2 && 3*s.frequency<.499*sr){
       // Extra third harmonic peaked at 200 Hz, one octave half-power in amplitude.
       const double oct=std::log2(std::max(20.,s.frequency)/200.);
       const double weight=std::exp(-.69314718056*oct*oct);
@@ -323,12 +338,13 @@ class Panel:public AudioProcessorEditor,private Timer {
    ignoreUnused(hover);
   }
  } thrustButton,modeButton,advancedButton;
- ComboBox detectorBox,releaseBox; Slider mixKnob,trimKnob; ToggleButton variableAR{"Variable A/R"};
+ ComboBox detectorBox,releaseBox; Slider mixKnob,trimKnob; ToggleButton variableAR{"Variable A/R"},nastyButton{"Nasty"};
+ std::unique_ptr<BA> nastyAttach;
  std::unique_ptr<BA> variableAttach;bool timingVariable=false;
  using CA=AudioProcessorValueTreeState::ComboBoxAttachment;
  std::unique_ptr<CA> detectorAttach,releaseAttach;std::unique_ptr<SA> mixAttach,trimAttach;
  bool expanded=false;
- void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);trimKnob.setVisible(show);variableAR.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?324:30));repaint();}
+ void showAdvanced(bool show){expanded=show;detectorBox.setVisible(show);releaseBox.setVisible(show);mixKnob.setVisible(show);trimKnob.setVisible(show);variableAR.setVisible(show);nastyButton.setVisible(show);advancedButton.setButtonText(show?"ADVANCED  -":"ADVANCED  +");setSize(W,H+ (show?357:30));repaint();}
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -362,6 +378,7 @@ public:
   mixKnob.setColour(Slider::rotarySliderFillColourId,Colour(blue));mixKnob.setColour(Slider::textBoxTextColourId,Colour(white));mixKnob.setColour(Slider::textBoxOutlineColourId,Colours::transparentBlack);
   detectorAttach=std::make_unique<CA>(p.params,"detector",detectorBox);releaseAttach=std::make_unique<CA>(p.params,"auto_release",releaseBox);mixAttach=std::make_unique<SA>(p.params,"mix",mixKnob);trimAttach=std::make_unique<SA>(p.params,"digital_out",trimKnob);
   addChildComponent(variableAR);variableAR.setBounds(16,H+283,W-32,27);variableAR.setColour(ToggleButton::textColourId,Colour(white));variableAR.setColour(ToggleButton::tickColourId,Colour(blue));variableAR.setTooltip("Switch the front-panel timing knobs to independent continuous digital attack/release ranges");variableAttach=std::make_unique<BA>(p.params,"variable_ar",variableAR);
+  addChildComponent(nastyButton);nastyButton.setBounds(16,H+313,W-32,27);nastyButton.setColour(ToggleButton::textColourId,Colour(white));nastyButton.setColour(ToggleButton::tickColourId,Colour(0xffff603d));nastyButton.setTooltip("Nasty: aggressive upper-mid and high-frequency harmonics, available in every mode");nastyAttach=std::make_unique<BA>(p.params,"nasty",nastyButton);
   showAdvanced(false);timerCallback();startTimerHz(20);
  }
  void timerCallback()override{
