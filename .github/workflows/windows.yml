@@ -2,6 +2,7 @@ name: Windows x64 VST3
 on:
   push:
     branches: [main]
+    paths: ['Source/**', 'reference/**', 'CMakeLists.txt', '.github/workflows/windows.yml']
   workflow_dispatch:
 jobs:
   build:
@@ -12,6 +13,54 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build
         run: cmake --build build --config Release --target Comp527_VST3 --parallel 4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pedalboard numpy
+      - shell: bash
+        run: |
+          python - <<'PY'
+          import numpy as np, csv, pathlib, json
+          from pedalboard import load_plugin
+          path=next(x for x in pathlib.Path('build/Comp527_artefacts/Release/VST3').rglob('*.vst3') if x.is_file())
+          p=load_plugin(str(path.resolve()))
+          sr=44100
+          t=np.arange(sr*5)/sr
+          results=[]
+          for bank,fn in [(2,'525c-thd-reference.csv'),(8,'525c-mod-8-harmonics.csv')]:
+              refs={}
+              for r in csv.DictReader(open('reference/'+fn)):
+                  if r['settled_half_window_0_1db']!='True' or r.get('deess','0')!='0': continue
+                  refs[(int(r['hz']),float(r['input_dbu']))]=r
+              for (f,l),r in sorted(refs.items()):
+                  if f not in (100,1000,5000,10000): continue
+                  p.ratio=bank
+                  p.threshold=0
+                  p.output=0
+                  p.attack=10
+                  p.release=.5
+                  x=(10**((l-22)/20)*np.sin(2*np.pi*f*t)).astype(np.float32)
+                  ks=list(range(2,min(20,(sr//2-1)//f)+1))
+                  target=100*np.sqrt(sum(10**(float(r[f'k{k}_dbc'])/10) for k in ks))
+                  row={'hz':f,'input_dbu':l,'ratio':bank,'reference_thd_pct':float(target)}
+                  for enabled in (False,True):
+                      p.colour=enabled
+                      y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
+                      a=2*np.abs(np.fft.rfft(y))/sr
+                      fund=a[f]
+                      h=[float(20*np.log10(max(a[k*f],1e-15))) for k in ks]
+                      thd=float(100*np.sqrt(sum(a[k*f]**2 for k in ks))/max(fund,1e-15))
+                      if enabled:
+                          row.update(thd_pct=thd,error_pct=100*(thd/target-1),fund_dbfs=float(20*np.log10(fund)),harmonics_dbfs=h)
+                      else: row['detector_only_thd_pct']=thd
+                  results.append(row)
+                  print('CALIBRATION',json.dumps(row),flush=True)
+          pathlib.Path('calibration.json').write_text(json.dumps(results,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 527-calibration
+          path: calibration.json
       - uses: actions/upload-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
