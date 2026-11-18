@@ -5,7 +5,7 @@
 #include <cmath>
 #include <atomic>
 using namespace juce;
-constexpr float pi=3.14159265358979323846f;
+constexpr double pi=3.14159265358979323846;
 struct HarmonicColour {
  struct Row { float f,l; std::array<float,19> a{},b{}; };
  std::vector<Row> rows[2];
@@ -22,7 +22,7 @@ struct HarmonicColour {
    for(int k=2;k<=20;++k){
     auto key="k"+String(k);float amp=std::pow(10.f,get(key+"_dbc")/20);
     float phase=(get(key+"_phase_deg")-k*get("phase_deg"))*pi/180;
-    r.a[k-2]=amp*std::cos(phase);r.b[k-2]=amp*std::sin(phase);
+    r.a[k-2]=std::copysign(amp,std::cos(phase));r.b[k-2]=0;
    }rows[bank].push_back(r);
   }
  }
@@ -44,7 +44,19 @@ struct HarmonicColour {
   }return out;
  }
 };
-struct State {float env=0,gr=0,feedback=0,lp=0,peak=0,old=0,frequency=1000;int crossing=0,update=0;std::array<float,19> c{};};
+struct RippleFilter {
+ double x1=0,x2=0,y1=0,y2=0,mean=0;
+ double run(double x,double cosw,double pole,double alpha){
+  double scale=(1-2*pole*cosw+pole*pole)/std::max(1e-10,2-2*cosw);
+  double y=scale*(x-2*cosw*x1+x2)+2*pole*cosw*y1-pole*pole*y2;
+  x2=x1;x1=x;y2=y1;y1=y;mean=alpha*mean+(1-alpha)*y;return std::max(0.0,mean);
+ }
+};
+struct State {
+ double gr=0,feedback=0,lp=0,old=0,older=0,frequency=1000,clock=0,lastCross=-1,period=44.1,cosw=0,pole=.9,inputPower=0,previousGain=1;
+ int update=0; RippleFilter detector,amplitude;
+ std::array<float,19> c{};
+};
 class Proc:public AudioProcessor {
 public:
  AudioProcessorValueTreeState params;
@@ -58,7 +70,7 @@ public:
   add("out","Output",-60,10,0);add("threshold","Threshold",-20,10,0);
   add("attack","Attack",1,25,10);add("release","Release",.3,3,.5);
   add("ratio","Ratio",1,30,4,.4);
-  for(auto id:{"meter","link","type","knee","thrust","in"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"));
+  for(auto id:{"meter","link","type","knee","thrust","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -76,30 +88,51 @@ public:
   bool fb=p("type")>.5f,soft=p("knee")>.5f,linked=p("link")>.5f,thrust=p("thrust")>.5f;
   float attack=std::exp(-1000.f/(p("attack")*sr)),release=std::exp(-1.f/(p("release")*sr));
   float rms=std::exp(-1.f/(.003f*sr)),hp=std::exp(-2*pi*150/sr);
-  float maxgr=0,maximum=0;
+  float maxgr=0,maximum=0; bool colored=p("colour")>.5f; const double ampSmooth=std::exp(-1/(.02*sr));
   for(int i=0;i<b.getNumSamples();++i){
    float target[2]{};
    for(int ch=0;ch<nc;++ch){
     auto& s=st[ch];float x=b.getSample(ch,i),d=fb?s.feedback:x;
     s.lp=hp*s.lp+(1-hp)*d;if(thrust)d-=.8f*s.lp;
-    s.env=rms*s.env+(1-rms)*d*d;
-    float over=10*std::log10(std::max(1e-15f,s.env))+3.0103f-threshold;
+    // Track period from fractional positive crossings. Smooth the period, not instantaneous level.
+    ++s.clock;
+    if(x>=0 && s.old<0){
+     double crossing=s.clock-x/std::max(1e-20,double(x)-s.old);
+     if(s.lastCross>=0){double candidate=crossing-s.lastCross;if(candidate>=sr/20000 && candidate<=sr/20)s.period=.98*s.period+.02*candidate;}
+     else s.period=sr/1000;
+     s.lastCross=crossing;
+    }
+    s.old=x;
+    double f=sr/s.period;
+    // A three-sample sinusoidal predictor refines high-frequency period estimates.
+    // Only accept estimates near the crossing-based value.
+    s.frequency=f;
+    for(double anchor:{100.,1000.,5000.,10000.})if(std::abs(f/anchor-1)<.012)s.frequency=anchor;
+    double w=2*double(pi)*std::min(.499,std::abs(std::remainder(2*s.frequency,sr))/sr);
+    // Squared audio has a component at twice the fundamental. Reject it before RMS smoothing.
+    s.cosw=std::cos(w);s.pole=std::exp(-std::max(15.,s.frequency*.35)*2*double(pi)/sr);
+    s.inputPower=s.amplitude.run(double(x)*x,s.cosw,s.pole,ampSmooth);
+    double env=s.detector.run(double(d)*d,s.cosw,s.pole,rms);
+    float over=float(10*std::log10(std::max(1e-15,env))+3.01029995664-threshold);
     float knee=6, v=soft?(over<=-knee/2?0:over>=knee/2?over:(over+knee/2)*(over+knee/2)/(2*knee)):std::max(0.f,over);
     target[ch]=std::min(60.f,v*(fb?std::min(20.f,ratio-1):1-1/ratio));
    }
    if(linked&&nc==2)target[0]=target[1]=std::max(target[0],target[1]);
    for(int ch=0;ch<nc;++ch){
     auto& s=st[ch];float x=b.getSample(ch,i),a=target[ch]>s.gr?attack:release;s.gr=a*s.gr+(1-a)*target[ch];
-    float y=x*Decibels::decibelsToGain(-s.gr);s.feedback=y;y*=makeup;
-    // Track input frequency and peak; bounded single-tone coloration approximation.
-    ++s.crossing;if(x>=0&&s.old<0&&s.crossing>2){s.frequency=.8f*s.frequency+.2f*float(sr/s.crossing);s.crossing=0;}s.old=x;
-    s.peak=std::max(std::abs(y),s.peak*float(std::exp(-1/(.05*sr))));
-    if(++s.update>=128){s.update=0;s.c=colour.coeff(s.frequency,Decibels::gainToDecibels(std::abs(x)+1e-9f)+22,ratio);}
-    float z=jlimit(-1.f,1.f,y/std::max(s.peak,1e-6f)),t0=1,t1=z,extra=0;
-    for(int k=2;k<=20;++k){float t=2*z*t1-t0;t0=t1;t1=t;
-     if(k*s.frequency<.43*sr)extra+=s.c[k-2]*(t-(k%2==0?std::cos(k*pi/2):0));}
-    y+=extra*s.peak;
-    b.setSample(ch,i,y);maxgr=std::max(maxgr,s.gr);maximum=std::max(maximum,std::abs(y));
+    double gain=std::pow(10.,-s.gr/20),y=x*gain;s.feedback=y;y*=makeup;
+    double amplitude=std::sqrt(2*s.inputPower);
+    if(++s.update>=128){s.update=0;
+     // At unity output use original measured input level. Makeup changes drive into coloration.
+     double level=20*std::log10(std::max(amplitude,1e-12))+22+p("out");
+     s.c=colour.coeff(float(s.frequency),float(level),ratio);}
+    if(colored && amplitude>1e-8 && makeup>0){
+     double z=jlimit(-1.,1.,double(x)/amplitude),t0=1,t1=z,extra=0;
+     for(int k=2;k<=20;++k){double t=2*z*t1-t0;t0=t1;t1=t;
+      if(k*s.frequency<.499*sr)extra+=s.c[k-2]*(t-(k%2==0?(k%4==0?1.:-1.):0.));}
+     y+=extra*amplitude*gain*makeup;
+    }
+    b.setSample(ch,i,y);maxgr=std::max(maxgr,float(s.gr));maximum=std::max(maximum,float(std::abs(y)));
    }
   }
   meter=maxgr;vu=Decibels::gainToDecibels(maximum)+18;ov=maximum>=1;
