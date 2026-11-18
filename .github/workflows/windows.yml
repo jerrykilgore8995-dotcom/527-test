@@ -91,6 +91,26 @@ jobs:
               print('DIGITAL_TRIM',json.dumps(row),flush=True)
           p.digital_output=0
           pathlib.Path('digital-trim.json').write_text(json.dumps(trim,indent=2))
+          nasty=[]
+          p.output=0
+          p.digital_output=0
+          p.ratio=2
+          p.threshold=10
+          p.colour=True
+          for f in (100,1000,2000,5000,10000):
+              for level in (4,18):
+                  x=(10**((level-22)/20)*np.sin(2*np.pi*f*t)).astype(np.float32)
+                  for enabled in (False,True):
+                      p.nasty=enabled
+                      y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
+                      a=2*np.abs(np.fft.rfft(y))/sr
+                      hs=[float(a[k*f]/a[f]) for k in range(2,min(20,(sr//2-1)//f)+1)]
+                      row=dict(hz=f,input_dbu=level,nasty=enabled,k2_pct=100*hs[0],thd_pct=100*np.sqrt(sum(h*h for h in hs)),harmonics_dbc=[float(20*np.log10(max(h,1e-15))) for h in hs])
+                      nasty.append(row)
+                      print('NASTY',json.dumps(row),flush=True)
+          p.nasty=False
+          pathlib.Path('nasty.json').write_text(json.dumps(nasty,indent=2))
+
 
 
           PY
@@ -130,6 +150,7 @@ jobs:
             calibration.json
             high-drive.json
             digital-trim.json
+            nasty.json
       - uses: actions/upload-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
