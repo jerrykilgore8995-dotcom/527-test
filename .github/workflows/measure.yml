@@ -14,7 +14,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
-          run-id: 44262452916
+          run-id: 44264615764
           github-token: ${{ github.token }}
           path: binary
       - uses: actions/setup-python@v5
@@ -56,15 +56,16 @@ jobs:
               thd=100*np.sqrt(sum(spec[k*f]**2 for k in range(2,21) if k*f<sr/2))/max(fund,1e-15)
               return dict(hz=f,input_dbu=dbu,output_setting_db=out,ratio=ratio,threshold=threshold,fund_dbfs=db(fund),gain_db=db(fund)-(dbu-22),thd_pct=float(thd),harmonics_dbfs=harmonics,harmonics_dbc=dbc)
           rows=[]
-          print('FOCUS',json.dumps(measure(1000,4,0,2)),flush=True)
-          for f in (100,1000,5000,10000):
-              for dbu in sorted(set(np.linspace(-40,18,31).tolist()+[-30,-18,4])):
-                  for out in sorted(set(np.linspace(-60,10,31).tolist()+[0])):
-                      rows.append(measure(f,float(dbu),float(out),2))
           for ratio in (2,8):
               for f in (100,1000,5000,10000):
-                  for dbu in (-30,-18,4):
-                      rows.append(measure(f,dbu,0,ratio))
+                  for level in (-30,-18,0,4,10,18):
+                      for out in (-12,-6,0,6,10):
+                          print('DRIVE',json.dumps(measure(f,level,out,ratio)),flush=True)
+          print('FOCUS',json.dumps(measure(1000,4,0,2)),flush=True)
+          for f in (100,1000,5000,10000):
+              for dbu in (-30,-18,0,4,10,18):
+                  for out in (-12,-6,0,6,10):
+                      rows.append(measure(f,dbu,out,2))
           focus=next(r for r in rows if r['hz']==1000 and r['input_dbu']==4 and r['output_setting_db']==0 and r['ratio']==2)
           pathlib.Path('measurements.json').write_text(json.dumps(rows))
           with open('measurements.csv','w',newline='') as fd:
