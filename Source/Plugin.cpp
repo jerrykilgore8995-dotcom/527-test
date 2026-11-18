@@ -92,6 +92,7 @@ struct RippleFilter {
  }
 };
 struct State {
+ double hpZ1=0,hpZ2=0; int hpMode=0;
  double gr=0,feedback=0,lp=0,old=0,older=0,frequency=1000,clock=0,lastCross=-1,period=44.1,cosw=0,pole=.9,inputPower=0,previousGain=1;
  int update=0; RippleFilter detector,amplitude;
  std::array<float,19> c{};
@@ -109,7 +110,8 @@ public:
   add("out","Output",-60,10,0);add("threshold","Threshold",-20,10,0);
   add("attack","Attack",1,25,10);add("release","Release",.3,3,.5);
   add("ratio","Ratio",1,30,4,.4);
-  for(auto id:{"meter","link","type","knee","thrust","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
+  for(auto id:{"meter","link","type","knee","in","colour"})l.add(std::make_unique<AudioParameterBool>(ParameterID{id,1},id,String(id)=="link"||String(id)=="in"||String(id)=="colour"));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"thrust",1},"Thrust",StringArray{"Off","80 Hz","120 Hz","250 Hz"},0));
   return l;
  }
  Proc():AudioProcessor(BusesProperties().withInput("Input",AudioChannelSet::stereo(),true).withOutput("Output",AudioChannelSet::stereo(),true)),params(*this,nullptr,"PARAMS",layout()){}
@@ -124,15 +126,21 @@ public:
   ScopedNoDenormals nd; int nc=b.getNumChannels();if(p("in")<.5f){meter=0;return;}
   float ratio=p("ratio");if(ratio>=29.9f)ratio=1000;
   float threshold=p("threshold")-22, makeup=p("out")<=-59.9f?0:Decibels::decibelsToGain(p("out"));
-  bool fb=p("type")>.5f,soft=p("knee")>.5f,linked=p("link")>.5f,thrust=p("thrust")>.5f;
+  bool fb=p("type")>.5f,soft=p("knee")>.5f,linked=p("link")>.5f;
+  const int thrust=jlimit(0,3,int(std::round(p("thrust"))));
   float attack=std::exp(-1000.f/(p("attack")*sr)),release=std::exp(-1.f/(p("release")*sr));
-  float rms=std::exp(-1.f/(.003f*sr)),hp=std::exp(-2*pi*150/sr);
+  float rms=std::exp(-1.f/(.003f*sr));
+  // Detector-only second order Butterworth high-pass; unity audio path.
+  const double fc[]={0.,80.,120.,250.};
+  const double w0=2*pi*std::min(fc[thrust],sr*.45)/sr, co=std::cos(w0), alpha=std::sin(w0)/std::sqrt(2.), norm=1./(1.+alpha);
+  const double b0=(1.+co)*.5*norm,b1=-(1.+co)*norm,b2=b0,a1=-2.*co*norm,a2=(1.-alpha)*norm;
   float maxgr=0,maximum=0; bool colored=p("colour")>.5f; const double ampSmooth=std::exp(-1/(.02*sr));
   for(int i=0;i<b.getNumSamples();++i){
    float target[2]{};
    for(int ch=0;ch<nc;++ch){
     auto& s=st[ch];float x=b.getSample(ch,i),d=fb?s.feedback:x;
-    s.lp=hp*s.lp+(1-hp)*d;if(thrust)d-=.8f*s.lp;
+    if(s.hpMode!=thrust){s.hpZ1=s.hpZ2=0.;s.hpMode=thrust;}
+    if(thrust!=0){const double y=b0*d+s.hpZ1;s.hpZ1=b1*d-a1*y+s.hpZ2;s.hpZ2=b2*d-a2*y;d=float(y);}
     // Track period from fractional positive crossings. Smooth the period, not instantaneous level.
     ++s.clock;
     if(x>=0 && s.old<0){
@@ -224,6 +232,16 @@ class Panel:public AudioProcessorEditor,private Timer {
  using SA=AudioProcessorValueTreeState::SliderAttachment;using BA=AudioProcessorValueTreeState::ButtonAttachment;
  std::array<std::unique_ptr<Dial>,5> knobs;std::array<std::unique_ptr<SA>,5> ka;
  std::array<Toggle,6> buttons;std::array<std::unique_ptr<BA>,6> ba;
+ struct ThrustButton:TextButton {
+  void paintButton(Graphics& g,bool hover,bool down)override{
+   auto r=getLocalBounds().toFloat().reduced(1);
+   g.setColour(Colour(0xff090a0a));g.fillRoundedRectangle(r,3);
+   g.setGradientFill(ColourGradient(Colour(down?0xff171919:0xff414444),0,1,Colour(0xff101111),0,r.getBottom(),false));g.fillRoundedRectangle(r.reduced(2),2);
+   g.setColour(Colour(0xff656868));g.drawRoundedRectangle(r.reduced(1),3,1);
+   g.setColour(Colour(0xfff3f4ef));g.setFont(Font(10.f,Font::bold));g.drawFittedText(getButtonText(),getLocalBounds().reduced(2),Justification::centred,1);
+   ignoreUnused(hover);
+  }
+ } thrustButton;
  void txt(Graphics& g,String s,float x,float y,float w,float h,float font,uint32 colour=white,bool bold=true){
   g.setColour(juce::Colour(colour));g.setFont(Font(font,bold?Font::bold:Font::plain));g.drawFittedText(s,Rectangle<float>(x,y,w,h).toNearestInt(),Justification::centred,1);
  }
@@ -238,10 +256,14 @@ public:
   Rectangle<int> b[]={{125,117,82,82},{125,270,82,82},{114,438,104,104},{130,454,72,72},{112,637,108,108}};
   for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),i==2);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
   const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={439,507,575,643,711,747};
-  for(int i=0;i<6;++i){buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
+  for(int i=0;i<6;++i){if(i==4)continue;buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
+  addAndMakeVisible(thrustButton);thrustButton.setBounds(12,710,34,27);
+  thrustButton.setTooltip("THRUST: Off / 80 Hz / 120 Hz / 250 Hz");
+  thrustButton.onClick=[this]{if(auto* param=p.params.getParameter("thrust")){int next=(int(std::round(p.p("thrust")))+1)%4;param->beginChangeGesture();param->setValueNotifyingHost(param->convertTo0to1(float(next)));param->endChangeGesture();}repaint();};
+  thrustButton.setButtonText(String(int(std::round(p.p("thrust")))));
   setSize(W,H);startTimerHz(20);
  }
- void timerCallback()override{repaint();}
+ void timerCallback()override{const int mode=jlimit(0,3,int(std::round(p.p("thrust"))));thrustButton.setButtonText(mode==0?"OFF":String(mode));repaint();}
  void paint(Graphics& g)override{
   g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
@@ -270,7 +292,8 @@ public:
   txt(g,"ATTACK",112,555,55,16,11);txt(g,"RELEASE",175,555,71,16,11,blue);txt(g,"mS",124,572,27,13,10);txt(g,"S",197,572,18,13,10,blue);
   arc(166,691,58,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),214,743,22,14,13);txt(g,"RATIO",142,754,49,16,12);
   const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
-  for(int i=0;i<5;++i){int yy=439+i*68;txt(g,names[i],43,yy+4,65,16,12,blue);txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}
+  for(int i=0;i<5;++i){int yy=439+i*68;txt(g,names[i],i==4?48:43,yy+4,65,16,12,blue);if(i!=4){txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}}
+  const char* freqLabel[]={"","80 Hz","120 Hz","250 Hz"};txt(g,freqLabel[jlimit(0,3,int(std::round(p.p("thrust"))))],49,730,62,13,10);
   txt(g,"IN",39,760,25,16,12);
 
  }
