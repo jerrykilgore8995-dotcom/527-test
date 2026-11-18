@@ -110,6 +110,25 @@ jobs:
                       print('NASTY',json.dumps(row),flush=True)
           p.nasty=False
           pathlib.Path('nasty.json').write_text(json.dumps(nasty,indent=2))
+          special=[]
+          p.output=0
+          p.digital_output=0
+          p.threshold=0
+          p.mix=100
+          p.colour=True
+          x=(10**((4-22)/20)*np.sin(2*np.pi*1000*t)).astype(np.float32)
+          for mode in ('Explode','Detonate'):
+              p.mode=mode
+              for enabled in (False,True):
+                  p.nasty=enabled
+                  y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
+                  a=2*np.abs(np.fft.rfft(y))/sr
+                  hs=[float(a[k*1000]/a[1000]) for k in range(2,21)]
+                  row=dict(mode=mode,nasty=enabled,hz=1000,input_dbu=4,threshold_dbu=0,fund_dbfs=float(20*np.log10(a[1000])),thd_pct=float(100*np.sqrt(sum(h*h for h in hs))),harmonics_dbc=[float(20*np.log10(max(h,1e-15))) for h in hs])
+                  special.append(row)
+                  print('SPECIAL_SPECTRUM',json.dumps(row),flush=True)
+          pathlib.Path('special-spectra.json').write_text(json.dumps(special,indent=2))
+
 
 
 
@@ -151,6 +170,7 @@ jobs:
             high-drive.json
             digital-trim.json
             nasty.json
+            special-spectra.json
       - uses: actions/upload-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
