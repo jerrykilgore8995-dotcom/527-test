@@ -182,7 +182,7 @@ public:
 };
 class Panel:public AudioProcessorEditor,private Timer {
  Proc& p;
- static constexpr int W=224,H=780;
+ static constexpr int W=252,H=896;
  static constexpr uint32 blue=0xff35b4e6, white=0xfff1f1ec;
  struct Dial:Slider {
   juce::Colour cap; bool outer;
@@ -191,13 +191,20 @@ class Panel:public AudioProcessorEditor,private Timer {
    auto r=getLocalBounds().toFloat().reduced(4);auto c=r.getCentre();float rad=r.getWidth()*.35f;
    double a=juce::MathConstants<double>::pi*(.75+1.5*valueToProportionOfLength(getValue()));
    auto pt=[&](double a0,float rr){return Point<float>(c.x+float(std::cos(a0))*rr,c.y+float(std::sin(a0))*rr);};
-   Path body; auto tip=pt(a,rad*1.35f);body.startNewSubPath(tip);body.lineTo(pt(a+.48,rad));body.addCentredArc(c.x,c.y,rad,rad,0,float(a+.48+juce::MathConstants<double>::halfPi),float(a+juce::MathConstants<double>::twoPi-.48+juce::MathConstants<double>::halfPi),false);body.closeSubPath();
-   g.setColour(Colours::black.withAlpha(.75f));g.fillPath(body,AffineTransform::translation(2,5));
-   g.setGradientFill(ColourGradient(juce::Colour(0xfffafafa),r.getX(),r.getY(),juce::Colour(0xff75797b),r.getRight(),r.getBottom(),false));g.fillPath(body);
-   g.setColour(juce::Colour(0xffdde1e2));g.strokePath(body,PathStrokeType(1.2f));
-   auto disk=Rectangle<float>(rad*1.65f,rad*1.65f).withCentre(c);
-   g.setColour(juce::Colour(0xffdce0e1));g.fillEllipse(disk.expanded(2));g.setColour(cap);g.fillEllipse(disk);
-   auto shade=ColourGradient(Colours::white.withAlpha(.13f),disk.getX(),disk.getY(),Colours::black.withAlpha(.25f),disk.getRight(),disk.getBottom(),false);g.setGradientFill(shade);g.fillEllipse(disk);
+   // Machined aluminium pointer: round skirt, projecting tapered index and recessed colour cap.
+   rad=r.getWidth()*.36f;
+   Path body;body.addEllipse(c.x-rad,c.y-rad,2*rad,2*rad);
+   Path pointer;pointer.startNewSubPath(pt(a,rad*1.52f));pointer.quadraticTo(pt(a+.19,rad*1.46f),pt(a+.34,rad*.86f));pointer.lineTo(pt(a-.34,rad*.86f));pointer.quadraticTo(pt(a-.19,rad*1.46f),pt(a,rad*1.52f));pointer.closeSubPath();body.addPath(pointer);body.setUsingNonZeroWinding(true);
+   g.setColour(Colours::black.withAlpha(.8f));g.fillPath(body,AffineTransform::translation(1.5f,4));
+   auto disk=Rectangle<float>(2*rad,2*rad).withCentre(c);
+   g.setGradientFill(ColourGradient(Colour(0xffeeeeec),c.x-rad,c.y-rad,Colour(0xff737777),c.x+rad,c.y+rad,false));g.fillPath(body);
+   g.setColour(Colour(0xffc8cbca));g.strokePath(body,PathStrokeType(.7f));
+   auto inset=disk.reduced(rad*.20f);
+   g.setColour(Colour(0xff535859));g.fillEllipse(inset.expanded(1));
+   g.setColour(Colour(0xfff4f4ed));g.drawEllipse(inset.expanded(.5f),1.3f);
+   g.setGradientFill(ColourGradient(cap.brighter(.13f),inset.getX(),inset.getY(),cap.darker(.18f),inset.getRight(),inset.getBottom(),false));g.fillEllipse(inset.reduced(1));
+   if(outer){g.setColour(Colour(0xffc7cccb));g.drawEllipse(disk.reduced(2),2);}
+
   }
  };
  struct Toggle:ToggleButton {
@@ -228,10 +235,10 @@ public:
  Panel(Proc& proc):AudioProcessorEditor(proc),p(proc){
   const char* ids[]={"out","threshold","attack","release","ratio"};
   unsigned cs[]={0xff202223,0xff087b82,0xffc6d0d3,0xffebf3f5,0xffed302b};
-  Rectangle<int> b[]={{125,112,74,74},{120,246,74,74},{106,398,94,94},{120,412,66,66},{100,577,104,104}};
+  Rectangle<int> b[]={{125,117,82,82},{125,270,82,82},{114,438,104,104},{130,454,72,72},{112,637,108,108}};
   for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),i==2);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
-  const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={389,448,507,566,625,663};
-  for(int i=0;i<6;++i){buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?61:13,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
+  const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={439,507,575,643,711,747};
+  for(int i=0;i<6;++i){buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?65:15,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
   setSize(W,H);startTimerHz(20);
  }
  void timerCallback()override{repaint();}
@@ -239,28 +246,32 @@ public:
   g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
   g.setColour(juce::Colour(0xff444646));g.drawRect(getLocalBounds(),1);
-  g.setColour(juce::Colour(0xff090a0a));g.fillEllipse(101,10,22,22);g.fillEllipse(101,742,22,22);
-  g.setColour(juce::Colour(0xffd9dcdc));g.fillEllipse(104,12,16,16);
-  txt(g,"527",146,22,57,23,21,blue);
-  screw(g,28,70);screw(g,196,70);screw(g,140,358);screw(g,27,704);screw(g,190,704);
-  txt(g,"GR",39,88,25,13,11);txt(g,"VU",67,88,25,13,11);txt(g,"OV",95,88,25,13,11);
-  g.setColour(juce::Colour(blue));g.fillRect(25,103,3,264);
+  g.setColour(Colour(0xff090a0a));g.fillEllipse(110,9,32,32);g.fillEllipse(110,849,32,32);
+  txt(g,"527",170,20,55,24,21,blue);
+  screw(g,29,82);screw(g,223,82);screw(g,157,407);screw(g,29,802);screw(g,223,802);
+  txt(g,"GR",42,98,25,13,11);txt(g,"VU",72,98,25,13,11);txt(g,"OV",100,98,25,13,11);
+  g.setColour(Colour(blue));g.fillRect(26,115,3,294);
   const float gr[]={1.5,4,6,8,10,12,15,17,19,23};const int vu[]={3,2,1,0,-1,-3,-5,-7,-10,-20};
   bool v=p.p("meter")>.5f;
-  for(int i=0;i<10;++i){int y=103+i*27;txt(g,String(-gr[i],i==0?1:0),29,y,30,16,10);txt(g,String(vu[i]),79,y,19,16,10);g.setColour(Colours::black);g.fillEllipse(60,y,18,18);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()>=gr[i])?juce::Colour(0xffff4828):juce::Colour(0xff43494a));g.fillEllipse(62,y+2,14,14);g.setColour(Colours::white.withAlpha(.17f));g.fillEllipse(64,y+3,5,3);}
-  g.setColour(p.ov.load()>0?Colours::red:juce::Colour(0xff43494a));g.fillEllipse(99,103,16,16);
-  auto mark=[&](float cx,float cy,float radius,double deg,String label,uint32 color,float fs=12.f){double a=deg*pi/180.;float x=cx+std::cos(a)*radius,y=cy+std::sin(a)*radius;g.setColour(juce::Colour(blue));g.fillEllipse(x-2,y-2,4,4);float rr=radius+10;txt(g,label,cx+std::cos(a)*rr-12,cy+std::sin(a)*rr-7,24,14,fs,color);};
-  auto arc=[&](float x,float y,float radius,std::initializer_list<const char*> labels,uint32 color){int i=0,n=int(labels.size());for(auto s:labels){String label=String::fromUTF8(s);mark(x,y,radius,140+260.*i++/std::max(1,n-1),label,color,11);}};
-  arc(162,149,39,{"","","","","0","10"},white);txt(g,String::charToString(0x221e),126,191,17,14,12);txt(g,"dB",147,193,22,14,11);
-  arc(157,283,39,{"10","7","4","0","-3","-6","-20"},white);txt(g,"dBu",139,326,32,14,11);
-  auto vertical=[&](String s,int x,int y){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),x,y+i*12,12,12,12);};vertical("OUT",208,131);vertical("THRESH",208,249);
-  arc(153,445,52,{"1","5","","15","20","25"},white);
-  arc(153,445,41,{".3",".5","1","1.5","2","2.5","3"},blue);
-  txt(g,"ATTACK",96,494,53,15,11);txt(g,"RELEASE",155,494,62,15,11,blue);txt(g,"mS",105,510,24,12,10);txt(g,"S",182,510,14,12,10,blue);
-  arc(152,629,53,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),182,674,26,16,13);txt(g,"RATIO",131,680,49,16,12);
-  const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","","OLD","SOFT",""};
-  for(int i=0;i<5;++i){int y=389+i*59;txt(g,names[i],40,y+4,64,16,12,blue);txt(g,upper[i],8,y-13,36,13,10);txt(g,lower[i],8,y+25,36,12,10);}
-  txt(g,"IN",37,676,25,16,12);
+  for(int i=0;i<10;++i){int yy=115+i*31;txt(g,String(-gr[i],i==0?1:0),30,yy,33,18,11);txt(g,String(vu[i]),83,yy,24,18,11);g.setColour(Colours::black);g.fillEllipse(64,yy,19,19);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()>=gr[i])?Colour(0xffff4828):Colour(0xff43494a));g.fillEllipse(66,yy+2,15,15);g.setColour(Colours::white.withAlpha(.17f));g.fillEllipse(68,yy+3,5,3);}
+  g.setColour(p.ov.load()>0?Colours::red:Colour(0xff43494a));g.fillEllipse(109,115,16,16);
+  auto dot=[&](float xx,float yy){g.setColour(Colour(blue));g.fillEllipse(xx-2,yy-2,4,4);};
+  auto mark=[&](float cx,float cy,float radius,double deg,String label,uint32 color,float fs=11.f){double a=deg*pi/180.;float xx=cx+std::cos(a)*radius,yy=cy+std::sin(a)*radius;dot(xx,yy);float rr=radius+10;txt(g,label,cx+std::cos(a)*rr-11,cy+std::sin(a)*rr-7,22,14,fs,color);};
+  auto arc=[&](float xx,float yy,float radius,std::initializer_list<const char*> labels,uint32 color){int i=0,n=int(labels.size());for(auto s:labels){mark(xx,yy,radius,135+270.*i++/std::max(1,n-1),String::fromUTF8(s),color);}};
+  arc(166,158,45,{"","","","","0","10"},white);
+  txt(g,String::charToString(0x221e),121,211,20,13,12);txt(g,"dB",153,211,26,13,11);
+  arc(166,311,45,{"10","7","4","0","-3","-6","-20"},white);txt(g,"dBu",150,362,32,14,11);
+  // Dedicated rightmost twelve-pixel column; no numeric labels enter it.
+  auto vertical=[&](String s,int yy){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),237,yy+i*13,13,13,12);};
+  vertical("OUT",141);vertical("THRESH",280);
+  // Independently positioned labels for concentric scales, avoiding the switch column.
+  arc(166,490,57,{"1","5","","15","20","25"},white);
+  arc(166,490,44,{".3",".5","1","1.5","2","2.5","3"},blue);
+  txt(g,"ATTACK",112,555,55,16,11);txt(g,"RELEASE",175,555,71,16,11,blue);txt(g,"mS",124,572,27,13,10);txt(g,"S",197,572,18,13,10,blue);
+  arc(166,691,58,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),214,743,22,14,13);txt(g,"RATIO",142,754,49,16,12);
+  const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","OUT","OLD","SOFT","OUT"};
+  for(int i=0;i<5;++i){int yy=439+i*68;txt(g,names[i],43,yy+4,65,16,12,blue);txt(g,upper[i],9,yy-13,36,13,10);txt(g,lower[i],9,yy+25,36,12,10);}
+  txt(g,"IN",39,760,25,16,12);
 
  }
 };
