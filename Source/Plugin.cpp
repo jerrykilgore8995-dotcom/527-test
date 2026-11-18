@@ -182,8 +182,8 @@ public:
 };
 class Panel:public AudioProcessorEditor,private Timer {
  Proc& p;
- static constexpr int W=252,H=882;
- static constexpr uint32 blue=0xff45a9cf, white=0xffe6e1ce;
+ static constexpr int W=224,H=780;
+ static constexpr uint32 blue=0xff35b4e6, white=0xfff1f1ec;
  struct Dial:Slider {
   juce::Colour cap; bool outer;
   Dial(juce::Colour c,bool o=false):cap(c),outer(o){setSliderStyle(RotaryVerticalDrag);setTextBoxStyle(NoTextBox,false,0,0);}
@@ -193,10 +193,10 @@ class Panel:public AudioProcessorEditor,private Timer {
    auto pt=[&](double a0,float rr){return Point<float>(c.x+float(std::cos(a0))*rr,c.y+float(std::sin(a0))*rr);};
    Path body; auto tip=pt(a,rad*1.35f);body.startNewSubPath(tip);body.lineTo(pt(a+.48,rad));body.addCentredArc(c.x,c.y,rad,rad,0,float(a+.48+juce::MathConstants<double>::halfPi),float(a+juce::MathConstants<double>::twoPi-.48+juce::MathConstants<double>::halfPi),false);body.closeSubPath();
    g.setColour(Colours::black.withAlpha(.75f));g.fillPath(body,AffineTransform::translation(2,5));
-   g.setGradientFill(ColourGradient(juce::Colour(0xfffaf4dc),r.getX(),r.getY(),juce::Colour(0xff77766b),r.getRight(),r.getBottom(),false));g.fillPath(body);
-   g.setColour(juce::Colour(0xffdcd6c2));g.strokePath(body,PathStrokeType(1.2f));
+   g.setGradientFill(ColourGradient(juce::Colour(0xfffafafa),r.getX(),r.getY(),juce::Colour(0xff75797b),r.getRight(),r.getBottom(),false));g.fillPath(body);
+   g.setColour(juce::Colour(0xffdde1e2));g.strokePath(body,PathStrokeType(1.2f));
    auto disk=Rectangle<float>(rad*1.65f,rad*1.65f).withCentre(c);
-   g.setColour(juce::Colour(0xffe9e2ce));g.fillEllipse(disk.expanded(2));g.setColour(cap);g.fillEllipse(disk);
+   g.setColour(juce::Colour(0xffdce0e1));g.fillEllipse(disk.expanded(2));g.setColour(cap);g.fillEllipse(disk);
    auto shade=ColourGradient(Colours::white.withAlpha(.13f),disk.getX(),disk.getY(),Colours::black.withAlpha(.25f),disk.getRight(),disk.getBottom(),false);g.setGradientFill(shade);g.fillEllipse(disk);
   }
  };
@@ -227,36 +227,41 @@ class Panel:public AudioProcessorEditor,private Timer {
 public:
  Panel(Proc& proc):AudioProcessorEditor(proc),p(proc){
   const char* ids[]={"out","threshold","attack","release","ratio"};
-  unsigned cs[]={0xff343430,0xff368783,0xffd2cbbb,0xffece4d3,0xffc93623};
-  Rectangle<int> b[]={{124,111,86,86},{124,260,86,86},{114,428,106,106},{132,447,70,70},{111,631,111,111}};
+  unsigned cs[]={0xff202223,0xff087b82,0xffc6d0d3,0xffebf3f5,0xffed302b};
+  Rectangle<int> b[]={{125,112,74,74},{120,246,74,74},{106,398,94,94},{120,412,66,66},{100,577,104,104}};
   for(int i=0;i<5;++i){knobs[i]=std::make_unique<Dial>(juce::Colour(cs[i]),i==2);addAndMakeVisible(*knobs[i]);knobs[i]->setBounds(b[i]);ka[i]=std::make_unique<SA>(p.params,ids[i],*knobs[i]);knobs[i]->setTooltip(ids[i]);}
-  const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={450,516,583,649,716,772};
-  for(int i=0;i<6;++i){buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?62:11,yy[i],i==5?52:32,i==5?52:32);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
+  const char* bs[]={"meter","link","type","knee","thrust","in"};int yy[]={389,448,507,566,625,663};
+  for(int i=0;i<6;++i){buttons[i].lamp=i==5;buttons[i].invert=(i==0||i==2||i==3);addAndMakeVisible(buttons[i]);buttons[i].setBounds(i==5?61:13,yy[i],i==5?42:26,i==5?42:26);ba[i]=std::make_unique<BA>(p.params,bs[i],buttons[i]);buttons[i].setTooltip(bs[i]);}
   setSize(W,H);startTimerHz(20);
  }
  void timerCallback()override{repaint();}
  void paint(Graphics& g)override{
-  g.fillAll(juce::Colour(0xff302e28));
+  g.fillAll(juce::Colour(0xff202222));
   Random rng(527);for(int i=0;i<12500;++i){g.setColour((i%2?Colours::white:Colours::black).withAlpha(.045f));g.fillRect(rng.nextFloat()*W,rng.nextFloat()*H,1.f,1.f);}
-  g.setColour(juce::Colour(0xff777367));g.drawRect(getLocalBounds(),1);
-  g.setColour(juce::Colour(0xffeeece2));g.fillEllipse(110,8,32,32);g.fillEllipse(110,842,32,32);
-  txt(g,"527",162,24,61,26,23,blue);
-  screw(g,30,83);screw(g,222,83);screw(g,157,400);screw(g,30,797);screw(g,222,797);
-  txt(g,"GR",38,100,31,16,12);txt(g,"VU",75,100,28,16,12);txt(g,"OV",112,100,22,16,12);
-  g.setColour(juce::Colour(blue));g.fillRect(26,117,4,303);
+  g.setColour(juce::Colour(0xff444646));g.drawRect(getLocalBounds(),1);
+  g.setColour(juce::Colour(0xff090a0a));g.fillEllipse(101,10,22,22);g.fillEllipse(101,742,22,22);
+  g.setColour(juce::Colour(0xffd9dcdc));g.fillEllipse(104,12,16,16);
+  txt(g,"527",146,22,57,23,21,blue);
+  screw(g,28,70);screw(g,196,70);screw(g,140,358);screw(g,27,704);screw(g,190,704);
+  txt(g,"GR",39,88,25,13,11);txt(g,"VU",67,88,25,13,11);txt(g,"OV",95,88,25,13,11);
+  g.setColour(juce::Colour(blue));g.fillRect(25,103,3,264);
   const float gr[]={1.5,4,6,8,10,12,15,17,19,23};const int vu[]={3,2,1,0,-1,-3,-5,-7,-10,-20};
   bool v=p.p("meter")>.5f;
-  for(int i=0;i<10;++i){int y=116+i*30;txt(g,String(-gr[i],i==0?1:0),34,y,37,20,12);txt(g,(vu[i]>0?"+":"")+String(vu[i]),91,y,26,20,12);g.setColour(Colours::black);g.fillEllipse(69,y,23,23);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()<gr[i])?juce::Colour(0xffff4828):juce::Colour(0xff625c49));g.fillEllipse(72,y+3,17,17);g.setColour(Colours::white.withAlpha(.17f));g.fillEllipse(75,y+5,6,4);}
-  g.setColour(p.ov.load()>0?Colours::red:juce::Colour(0xff5a4d3b));g.fillEllipse(110,117,19,19);
-  scale(g,167,154,49,{"∞","","","0","10"});txt(g,"dB",151,215,32,16,12);
-  scale(g,167,303,49,{"10","7","4","0","-3","-6","-20"});txt(g,"dBu",151,364,32,16,12);
-  auto vertical=[&](String s,int x,int y){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),x,y+i*14,18,14,13);};vertical("OUT",226,145);vertical("THRESH",226,268);
-  scale(g,167,481,58,{"1","5","","15","20","25"});scale(g,167,481,46,{".3",".5","1","1.5","2","2.5","3"},blue);
-  txt(g,"ATTACK",104,548,69,17,13);txt(g,"RELEASE",170,548,75,17,12,blue);txt(g,"mS",110,566,40,16,12);txt(g,"S",189,566,30,16,12,blue);
-  scale(g,166,686,62,{"1","1.5","2.5","3","4","6","10","∞"});txt(g,"RATIO",134,753,65,18,14);
+  for(int i=0;i<10;++i){int y=103+i*27;txt(g,String(-gr[i],i==0?1:0),29,y,30,16,10);txt(g,String(vu[i]),79,y,19,16,10);g.setColour(Colours::black);g.fillEllipse(60,y,18,18);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()>=gr[i])?juce::Colour(0xffff4828):juce::Colour(0xff43494a));g.fillEllipse(62,y+2,14,14);g.setColour(Colours::white.withAlpha(.17f));g.fillEllipse(64,y+3,5,3);}
+  g.setColour(p.ov.load()>0?Colours::red:juce::Colour(0xff43494a));g.fillEllipse(99,103,16,16);
+  auto mark=[&](float cx,float cy,float radius,double deg,String label,uint32 color,float fs=12.f){double a=deg*pi/180.;float x=cx+std::cos(a)*radius,y=cy+std::sin(a)*radius;g.setColour(juce::Colour(blue));g.fillEllipse(x-2,y-2,4,4);float rr=radius+10;txt(g,label,cx+std::cos(a)*rr-12,cy+std::sin(a)*rr-7,24,14,fs,color);};
+  auto arc=[&](float x,float y,float radius,std::initializer_list<const char*> labels,uint32 color){int i=0,n=int(labels.size());for(auto s:labels){String label=String::fromUTF8(s);mark(x,y,radius,140+260.*i++/std::max(1,n-1),label,color,11);}};
+  arc(162,149,39,{"","","","","0","10"},white);txt(g,String::charToString(0x221e),126,191,17,14,12);txt(g,"dB",147,193,22,14,11);
+  arc(157,283,39,{"10","7","4","0","-3","-6","-20"},white);txt(g,"dBu",139,326,32,14,11);
+  auto vertical=[&](String s,int x,int y){for(int i=0;i<s.length();++i)txt(g,s.substring(i,i+1),x,y+i*12,12,12,12);};vertical("OUT",208,131);vertical("THRESH",208,249);
+  arc(153,445,52,{"1","5","","15","20","25"},white);
+  arc(153,445,41,{".3",".5","1","1.5","2","2.5","3"},blue);
+  txt(g,"ATTACK",96,494,53,15,11);txt(g,"RELEASE",155,494,62,15,11,blue);txt(g,"mS",105,510,24,12,10);txt(g,"S",182,510,14,12,10,blue);
+  arc(152,629,53,{"1","1.5","2.5","3","4","6","10",""},white);txt(g,String::charToString(0x221e),182,674,26,16,13);txt(g,"RATIO",131,680,49,16,12);
   const char* names[]={"METER","LINK","TYPE","KNEE","THRUST"};const char* upper[]={"GR","IN","NEW","HARD","IN"};const char* lower[]={"VU","","OLD","SOFT",""};
-  for(int i=0;i<5;++i){int y=450+i*66;txt(g,names[i],46,y+5,75,22,14,blue);txt(g,upper[i],7,y-16,40,16,11);txt(g,lower[i],7,y+30,40,14,11);}
-  txt(g,"IN",37,782,25,20,14);
+  for(int i=0;i<5;++i){int y=389+i*59;txt(g,names[i],40,y+4,64,16,12,blue);txt(g,upper[i],8,y-13,36,13,10);txt(g,lower[i],8,y+25,36,12,10);}
+  txt(g,"IN",37,676,25,16,12);
+
  }
 };
 AudioProcessorEditor* Proc::createEditor(){return new Panel(*this);}
