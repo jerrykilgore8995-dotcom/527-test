@@ -132,7 +132,7 @@ public:
   g.setColour(Colours::whitesmoke);label("GR VU OV",12,78,105);
   const float gr[]={1.5,4,6,8,10,12,15,17,19,23};const int vu[]={3,2,1,0,-1,-3,-5,-7,-10,-20};
   bool v=p.p("meter")>.5f;
-  for(int i=0;i<10;++i){int y=104+i*22;g.setColour(Colours::whitesmoke);label(String(-gr[i],gr[i]==1.5f?1:0),8,y,42);label(String(vu[i]),66,y,32);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()<gr[i])?Colours::orangeRed:juce::Colour(0xff49362b));g.fillEllipse(51,y+3,13,13);}
+  for(int i=0;i<10;++i){int y=104+i*22;g.setColour(Colours::whitesmoke);label(String(-gr[i],gr[i]==1.5f?1:0),8,y,42);label(String(vu[i]),66,y,32);g.setColour((v?p.vu.load()>=vu[i]:p.meter.load()<gr[i])?juce::Colour(0xffff4500):juce::Colour(0xff49362b));g.fillEllipse(51,y+3,13,13);}
   g.setColour(p.ov.load()>0?Colours::red:Colours::darkred);g.fillEllipse(95,100,9,9);
   g.setColour(juce::Colour(0xff48a3c4));label("OUT",181,165);label("THRESH",181,297);label("ATTACK",102,473);label("RELEASE",183,473);label("RATIO",142,650);
   const char* names[]={"METER","LINK","TYPE","KNEE","THRUST","IN"};for(int i=0;i<6;++i)label(names[i],46,(i==5?672:350+i*57),65);
