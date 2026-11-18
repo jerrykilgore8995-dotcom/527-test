@@ -2,6 +2,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <BinaryData.h>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <atomic>
 using namespace juce;
@@ -27,7 +28,7 @@ struct HarmonicColour {
   }
  }
  HarmonicColour(){for(int i=0;i<BinaryData::namedResourceListSize;++i){int n=0;auto d=BinaryData::getNamedResource(BinaryData::namedResourceList[i],n);if(d)load(d,n,String(BinaryData::namedResourceList[i]).contains("mod8")?1:0);}}
- std::array<float,19> coeff(float f,float l,float ratio) const {
+ std::array<float,19> coeff(float f,float l,float ratio,double sampleRate) const {
   std::array<float,19> out{};
   float mix=jlimit(0.f,1.f,(ratio-2)/6);
   for(int bank=0;bank<2;++bank){
@@ -41,7 +42,29 @@ struct HarmonicColour {
     for(int k=0;k<19;++k)a[k]+=w*r.a[k];
    }
    if(sum>0)for(int k=0;k<19;++k)out[k]+=a[k]/sum*(bank?mix:1-mix);
-  }return out;
+  }
+  // Creative high-drive extension: preserve all measured profiles through +4 dBu.
+  // Scale total RMS harmonic amplitude, then redistribute energy between parity groups.
+  if(l>4.f){
+   const double t=l<=10.f?double(l-4.f)/12.0:0.5+0.5*double(l-10.f)/8.0;
+   const double blend=std::clamp(t,0.0,1.0), boost=1.0+blend;
+   double even=0,odd=0;
+   for(int k=2;k<=20;++k){
+    if(k*double(f)>=.499*sampleRate)continue;
+    double a=out[k-2]; (k%2==0?even:odd)+=a*a;
+   }
+   const double total=even+odd;
+   if(even>1e-30 && odd>1e-30){
+    const double fraction=even/total, target=fraction+blend*(.5-fraction);
+    const double es=boost*std::sqrt(target*total/even), os=boost*std::sqrt((1-target)*total/odd);
+    for(int k=2;k<=20;++k)out[k-2]*=float(k%2==0?es:os);
+   }else{
+    // At high fundamentals only one parity may be below Nyquist.
+    // Preserve the intended in-band THD multiplier without folding ultrasonic orders back.
+    for(auto& a:out)a*=float(boost);
+   }
+  }
+  return out;
  }
 };
 struct RippleFilter {
@@ -125,7 +148,7 @@ public:
     if(++s.update>=128){s.update=0;
      // At unity output use original measured input level. Makeup changes drive into coloration.
      double level=20*std::log10(std::max(amplitude,1e-12))+22+p("out");
-     s.c=colour.coeff(float(s.frequency),float(level),ratio);}
+     s.c=colour.coeff(float(s.frequency),float(level),ratio,sr);}
     if(colored && amplitude>1e-8 && makeup>0){
      double z=jlimit(-1.,1.,double(x)/amplitude),t0=1,t1=z,extra=0;
      for(int k=2;k<=20;++k){double t=2*z*t1-t0;t0=t1;t1=t;
