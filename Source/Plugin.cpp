@@ -251,7 +251,8 @@ public:
      double z=jlimit(-1.,1.,double(x)/amplitude),t0=1,t1=z,extra=0;
      // NASTY is a separate HF-weighted nonlinear colour stage, not extra gain reduction.
      const double freq=s.frequency;
-     const double band=nasty?jlimit(0.,1.,std::log2(std::max(1000.,freq)/1000.)/std::log2(5.)):0.;
+     const double band=nasty?jlimit(0.,1.,std::log2(std::max(100.,freq)/100.)/std::log2(50.)):0.;
+     const double mid=nasty?jlimit(0.,1.,1.-std::abs(std::log2(std::max(100.,freq)/1000.))/std::log2(5.)):0.;
      const double top=nasty?jlimit(0.,1.,std::log2(std::max(5000.,freq)/5000.)):0.;
      const double drive=nasty?20.*std::log10(std::max(amplitude,1e-12))+22.+p("out"):0.;
      const double strength=nasty?jlimit(0.,1.,(drive+30.)/48.):0.;
@@ -262,7 +263,8 @@ public:
       if(nasty && band>0.){
        if(k==2)coeff+=(std::copysign(k2Target,coeff==0.?1.:coeff)-coeff)*strength;
        else {const double weights[]={0.,0.,0.,.64,.40,.26,.18,.13,.09,.065,.047,.034,.025,.018,.013,.009,.007,.005,.004,.003,.002};
-        coeff+=strength*k2Target*weights[k]*(k%4==0||k%4==1?-1.:1.);}
+        const double grit=(k==5?.004:k==7?.003:k==9?.002:k==11?.0015:k==13?.001:k==15?.0007:0.)*mid;
+        coeff+=strength*(k2Target*weights[k]+grit)*(k%4==0||k%4==1?-1.:1.);}
       }
       extra+=coeff*(t-(k%2==0?(k%4==0?1.:-1.):0.));}
      if(colored && mode==2 && 3*s.frequency<.499*sr){
