@@ -56,6 +56,27 @@ jobs:
                   results.append(row)
                   print('CALIBRATION',json.dumps(row),flush=True)
           pathlib.Path('calibration.json').write_text(json.dumps(results,indent=2))
+          drive=[]
+          for ratio in (2,8):
+              p.ratio=ratio
+              p.threshold=0
+              p.attack=10
+              p.release=.5
+              p.colour=True
+              for f in (100,1000,5000,10000):
+                  ks=list(range(2,min(20,(sr//2-1)//f)+1))
+                  for l,out in [(4,0),(10,0),(18,0),(4,6),(8,10)]:
+                      p.output=out
+                      x=(10**((l-22)/20)*np.sin(2*np.pi*f*t)).astype(np.float32)
+                      y=p.process(np.stack([x,x]),sr,buffer_size=512,reset=True)[0,-sr:]
+                      a=2*np.abs(np.fft.rfft(y))/sr
+                      e=sum(float(a[k*f])**2 for k in ks if k%2==0)
+                      o=sum(float(a[k*f])**2 for k in ks if k%2==1)
+                      row=dict(hz=f,ratio=ratio,input_dbu=l,output_db=out,effective_dbu=l+out,thd_pct=100*np.sqrt(e+o)/max(float(a[f]),1e-15),even_energy_pct=100*e/max(e+o,1e-30),fund_dbfs=float(20*np.log10(max(a[f],1e-15))),harmonics_dbc=[float(20*np.log10(max(a[k*f],1e-15)/max(a[f],1e-15))) for k in ks])
+                      drive.append(row)
+                      print('HIGH_DRIVE',json.dumps(row),flush=True)
+          pathlib.Path('high-drive.json').write_text(json.dumps(drive,indent=2))
+
           PY
       - name: Capture compiled plugin editor
         timeout-minutes: 2
@@ -89,7 +110,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: 527-calibration
-          path: calibration.json
+          path: |
+            calibration.json
+            high-drive.json
       - uses: actions/upload-artifact@v4
         with:
           name: 527-0.1-Windows-x64-VST3
