@@ -27,15 +27,21 @@ jobs:
           import numpy as np, csv, pathlib, json
           from pedalboard import load_plugin
           paths=list(pathlib.Path('binary').rglob('*.vst3'))
-          path=next(p for p in paths if p.is_dir())
-          p=load_plugin(str(path.resolve()))
+          print('BUNDLE FILES', [str(x) for x in pathlib.Path('binary').rglob('*')], flush=True)
+          candidates=[p for p in paths if p.is_file()]+[p for p in paths if p.is_dir()]
+          for path in candidates:
+              try:
+                  p=load_plugin(str(path.resolve()))
+                  break
+              except ImportError as e:
+                  print(str(e),flush=True)
+          else:
+              raise RuntimeError('No loadable VST3 binary')
           print('PARAMETERS',list(p.parameters))
           sr=44100
           n=sr*2
           t=np.arange(n)/sr
           def setp(key,val):
-              q=p.parameters[key]
-              q.raw_value=q.get_raw_value_for(val) if hasattr(q,'get_raw_value_for') else q.raw_value
               setattr(p,key,val)
           def measure(f,dbu,out,ratio,threshold=0):
               for k,v in [('output',out),('ratio',ratio),('threshold',threshold),('attack',10),('release',0.5)]:
@@ -50,6 +56,7 @@ jobs:
               thd=100*np.sqrt(sum(spec[k*f]**2 for k in range(2,21) if k*f<sr/2))/max(fund,1e-15)
               return dict(hz=f,input_dbu=dbu,output_setting_db=out,ratio=ratio,threshold=threshold,fund_dbfs=db(fund),gain_db=db(fund)-(dbu-22),thd_pct=float(thd),harmonics_dbfs=harmonics,harmonics_dbc=dbc)
           rows=[]
+          print('FOCUS',json.dumps(measure(1000,4,0,2)),flush=True)
           for f in (100,1000,5000,10000):
               for dbu in sorted(set(np.linspace(-40,18,31).tolist()+[-30,-18,4])):
                   for out in sorted(set(np.linspace(-60,10,31).tolist()+[0])):
